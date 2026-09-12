@@ -35,7 +35,7 @@ pub struct HistoryActionAdd {
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct HistoryActionClear {
-    pub ranges: SortedRanges<u64>,
+    pub ranges: SortedRanges<u32>,
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]

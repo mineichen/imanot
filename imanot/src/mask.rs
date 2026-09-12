@@ -12,7 +12,7 @@ use imask::{
     CreateRange, ImageDimension, ImaskSet, NonZeroRange, SortedRanges, SortedRangesIter,
     SortedRangesSpanIter, Span,
 };
-use log::{debug, info, warn};
+use log::{debug, info};
 use pulp::{Arch, Simd, WithSimd};
 
 use crate::PixelArea;
@@ -203,7 +203,7 @@ impl MaskImage {
                                 target.fill(color);
                             }
                             #[cfg(debug_assertions)]
-                            warn!("Range {range:?} not contained in pixels 0..{pixels_len}");
+                            log::warn!("Range {range:?} not contained in pixels 0..{pixels_len}");
                             break;
                         };
                         target.fill(color);
@@ -215,7 +215,7 @@ impl MaskImage {
                                 composite_layer_over(target, t, layer);
                             }
                             #[cfg(debug_assertions)]
-                            warn!("Range {range:?} not contained in pixels 0..{pixels_len}");
+                            log::warn!("Range {range:?} not contained in pixels 0..{pixels_len}");
                             break;
                         };
                         composite_layer_over(target, t, layer);
@@ -254,6 +254,14 @@ impl MaskImage {
 
     pub fn take_dirty(&mut self) -> Option<AffectedLayer> {
         self.history.take_dirty()
+    }
+
+    /// The currently applied (tip) history action, or `None` if history is
+    /// empty / fully undone. Tools holding snapshots of mask ranges compare
+    /// this against the action they last saw to detect that the mask changed
+    /// underneath them (push, undo, redo or another tool's commit).
+    pub(crate) fn last_history_action(&self) -> Option<HistoryAction> {
+        self.history.iter().next_back().cloned()
     }
 
     pub fn add_history_action(&mut self, action: HistoryAction) {

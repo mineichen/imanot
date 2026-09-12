@@ -86,7 +86,7 @@ impl StrokeState {
             NonZero::new(y_max - y_min + 1).unwrap(),
         );
         self.dirty = Some(match self.dirty {
-            Some(d) => d.bounds(&stamp_rect),
+            Some(d) => d.union(&stamp_rect),
             None => stamp_rect,
         });
     }

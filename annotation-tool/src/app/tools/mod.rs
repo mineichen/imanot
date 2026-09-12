@@ -2,7 +2,7 @@ use std::num::NonZeroU16;
 
 use std::any::Any;
 
-use imanot::{BrushTool, ImageLoadOk, Mode, PanTool, RectTool, ToolFactory};
+use imanot::{BrushTool, DragTool, ImageLoadOk, Mode, PanTool, RectTool, ToolFactory};
 
 mod registry;
 #[cfg(feature = "sam")]
@@ -35,6 +35,18 @@ pub fn default_tools(config: &crate::config::Config) -> Vec<(String, ToolFactory
         #[cfg(feature = "sam")]
         ("SAM".to_string(), sam::SamTool::create_factory(session)),
         ("Rect".to_string(), RectTool::create_factory()),
+        (
+            "PanDrag".to_string(),
+            DragTool::create_factory_with(|t| {
+                t.set_pan_on_drag(true);
+            }),
+        ),
+        (
+            "RectDrag".to_string(),
+            DragTool::create_factory_with(|t| {
+                t.set_pan_on_drag(false);
+            }),
+        ),
         ("Brush".to_string(), BrushTool::create_factory()),
         (
             "Brush clear".to_string(),
