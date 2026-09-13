@@ -36,7 +36,6 @@ pub struct DragTool {
     layer: AffectedLayer,
     /// Dragging on empty space pans instead of rect-selecting.
     pub pan_on_drag: bool,
-    rect_selection: RectSelection,
     selection: Option<ActiveSelection>,
     gesture: Option<Gesture>,
 }
@@ -140,8 +139,9 @@ impl DragTool {
                 return true;
             }
         }
-        self.gesture = Some(Gesture::Rect);
-        let _ = self.rect_selection.drag_finished(ctx);
+        let mut selection = RectSelection::default();
+        let _ = selection.drag_finished(ctx);
+        self.gesture = Some(Gesture::Rect(selection));
         false
     }
 
@@ -396,7 +396,7 @@ impl DragTool {
     /// `gesture.rs` as pure functions, so overlay and rasterization can never
     /// drift apart.
     fn update_gesture_frame(&mut self, pointer: Point2<f64>, shift: bool) {
-        let gesture = self.gesture;
+        let gesture = self.gesture.as_mut();
         let Some(sel) = self.selection.as_mut() else {
             return;
         };
@@ -491,12 +491,12 @@ impl DragTool {
 
     /// Cursor for the current hover/gesture state.
     fn hover_cursor(&self, ctx: &ToolContext, pointer_screen: Option<Pos2>) {
-        let icon = match (self.gesture, self.selection.as_ref(), pointer_screen) {
+        let icon = match (&self.gesture, self.selection.as_ref(), pointer_screen) {
             (Some(Gesture::Move(_)), _, _) => CursorIcon::Grabbing,
             (Some(Gesture::Resize(g)), Some(sel), _) => resize_cursor(&sel.frame, g.anchor),
             (Some(Gesture::Rotate(_)), _, _) => CursorIcon::Grabbing,
             (Some(Gesture::Pan), _, _) => CursorIcon::AllScroll,
-            (Some(Gesture::Rect), _, _) => CursorIcon::Crosshair,
+            (Some(Gesture::Rect(_)), _, _) => CursorIcon::Crosshair,
             (None, Some(sel), Some(p)) => match hit_test(&*ctx.painter, p, &sel.frame) {
                 HoverPart::Outside => return,
                 HoverPart::Inside => CursorIcon::Move,
@@ -552,7 +552,7 @@ impl Tool for DragTool {
             .or_else(|| ctx.response.hover_pos());
         let pointer = pointer_screen.map(|p| ctx.painter.screen_to_image(p));
 
-        match self.gesture {
+        match &mut self.gesture {
             Some(Gesture::Pan) => {
                 if ctx.response.drag_stopped() {
                     self.gesture = None;
@@ -560,8 +560,8 @@ impl Tool for DragTool {
                 PanTool::default().handle_interaction(ctx);
                 return;
             }
-            Some(Gesture::Rect) => {
-                let result = self.rect_selection.drag_finished(&mut ctx);
+            Some(Gesture::Rect(rect_selection)) => {
+                let result = rect_selection.drag_finished(&mut ctx);
                 if let Some(result) = result {
                     // Shift on release adds to the selection instead of
                     // replacing it.
