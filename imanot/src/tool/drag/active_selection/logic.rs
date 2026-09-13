@@ -1,4 +1,6 @@
-use imask::{ImageDimension, ImaskSet, SortedRanges};
+use std::iter::FusedIterator;
+
+use imask::{ImageDimension, ImaskSet, PipelineError, SortedRanges, SortedRangesSpanBuilder, Span};
 use nalgebra::Matrix3;
 
 use super::super::frame::Frame;
@@ -43,7 +45,7 @@ impl LayerSelection {
     pub(crate) fn restore(&self) -> Option<SortedRanges<u32>> {
         match (self.background.as_ref(), self.committed.as_ref()) {
             (Some(bg), Some(committed)) => {
-                let under = bg.spans::<u32>().intersect(committed.spans::<u32>());
+                let under = bg.spans::<u32>().intersect(committed.spans::<u32>()).ok()?;
                 SortedRanges::try_from_span_iter_minbounds(under).ok()
             }
             _ => None,
@@ -109,7 +111,7 @@ impl ActiveSelectionLogic {
             entry.background = entry
                 .background
                 .take()
-                .and_then(|bg| subtract_ranges(&bg, &ranges));
+                .and_then(|bg| subtract_ranges(&bg, ranges.spans()));
             if let (Some(original), Some(committed)) = (
                 union_ranges(&entry.original, &ranges),
                 entry
@@ -140,7 +142,23 @@ pub(crate) fn union_ranges(
 /// `a` minus `b` as tight ranges. `None` when empty.
 pub(crate) fn subtract_ranges(
     a: &SortedRanges<u32>,
-    b: &SortedRanges<u32>,
+    b: impl Iterator<Item = Span<u32>>,
 ) -> Option<SortedRanges<u32>> {
-    SortedRanges::try_from_span_iter_minbounds(a.spans::<u32>().subtract(b.spans::<u32>())).ok()
+    SortedRanges::try_from_span_iter_minbounds(a.spans::<u32>().subtract(b)).ok()
+}
+
+pub(crate) fn subtract_ranges_collect_subtrahend(
+    a: &SortedRanges<u32>,
+    b: impl FusedIterator<Item = Span<u32>> + ImageDimension,
+) -> (
+    Option<SortedRanges<u32>>,
+    Result<SortedRanges<u32>, PipelineError>,
+) {
+    let span_builder = SortedRangesSpanBuilder::new(b.bounds());
+    let mut b = b.fold_inline(span_builder, |b, n| {
+        b.add(*n);
+    });
+
+    let r = SortedRanges::try_from_span_iter_minbounds(a.spans::<u32>().subtract(&mut b)).ok();
+    (r, b.finish_all().build())
 }

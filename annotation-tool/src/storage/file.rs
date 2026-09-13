@@ -10,7 +10,7 @@ use std::{
 use bytemuck::{AnyBitPattern, NoUninit};
 use futures::{FutureExt, future::BoxFuture};
 use imanot::{ImageData, ImageId, PixelArea, PixelAreaStack, load_image};
-use imask::{ImageDimension, ImaskSet, Rect, SignedNonZeroable, Span};
+use imask::{ImageDimension, ImaskSet, Rect, Roi, SignedNonZeroable, Span};
 use itertools::Itertools;
 use log::info;
 
@@ -139,14 +139,27 @@ impl Storage for FileStorage {
                 }
                 let (bounds, color) = if file_version == 1 {
                     let color = imanot::random_color_from_seed(all.len() as u16);
-                    (Rect::new(0u32, 0, image_width, image_height), color)
+                    (
+                        Roi::new_unchecked(0u32..image_width.get(), 0..image_height.get()),
+                        color,
+                    )
                 } else {
                     let offset_x = read_u32(&mut f)?;
                     let offset_y = read_u32(&mut f)?;
                     let width = read_nz_u32(&mut f, "NonZero width")?;
                     let height = read_nz_u32(&mut f, "NonZero height")?;
+                    let x_end = offset_x.checked_add(width.get()).ok_or(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "x + width overflows",
+                    ))?;
+
+                    let y_end = offset_y.checked_add(height.get()).ok_or(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "y + height overflows",
+                    ))?;
+
                     let color = imanot::random_color_from_seed(all.len() as u16);
-                    (Rect::new(offset_x, offset_y, width, height), color)
+                    (Roi::new(offset_x..x_end, offset_y..y_end), color)
                 };
 
                 starts.resize(pixel_range_len, 0);
@@ -159,8 +172,8 @@ impl Storage for FileStorage {
                     .zip(lens.iter())
                     .map(|(start, len)| match TLen::create_non_zero(*len) {
                         Some(l) => {
-                            let x = *start % bounds.width.get() + bounds.x;
-                            let y = *start / bounds.width.get() + bounds.y;
+                            let x = *start % bounds.width().get() + bounds.x.start;
+                            let y = *start / bounds.width().get() + bounds.y.start;
                             Ok(Span::new(x..x + u32::from(l.into()), y))
                         }
                         None => Err(std::io::Error::new(
