@@ -1,5 +1,7 @@
 use nalgebra::{Matrix3, Point2, Vector2};
 
+use crate::RectSelection;
+
 use super::frame::{Anchor, Frame, clamp_half, rotate_about, scale_about_frame, snap_angle};
 
 /// Move gesture state: press origin plus the frame/matrix it started from.
@@ -149,13 +151,12 @@ fn locked_halves(base_half: Vector2<f64>, s: Vector2<f64>, d: Vector2<f64>) -> V
 /// so cancelling restores both consistently. The per-variant state lives in
 /// `GestureMove`/`GestureResize`/`GestureRotate`; this enum only tags which
 /// gesture is active and forwards to its methods.
-#[derive(Clone, Copy)]
 pub(crate) enum Gesture {
     Move(GestureMove),
     Resize(GestureResize),
     Rotate(GestureRotate),
     /// Rect-select in progress (state lives in `RectSelection`).
-    Rect,
+    Rect(RectSelection),
     /// Pan in progress (delegated to `PanTool`).
     Pan,
 }
@@ -166,12 +167,12 @@ impl Gesture {
     /// from the same gesture parameters, so overlay and rasterization can
     /// never drift apart. Returns `None` for non-transform gestures (`Rect`,
     /// `Pan`).
-    pub(crate) fn apply(self, pointer: Point2<f64>, shift: bool) -> Option<(Frame, Matrix3<f64>)> {
+    pub(crate) fn apply(&self, pointer: Point2<f64>, shift: bool) -> Option<(Frame, Matrix3<f64>)> {
         match self {
             Self::Move(g) => Some(g.apply(pointer)),
             Self::Resize(g) => Some(g.apply(pointer, shift)),
             Self::Rotate(g) => Some(g.apply(pointer, shift)),
-            Self::Rect | Self::Pan => None,
+            Self::Rect(_) | Self::Pan => None,
         }
     }
 
@@ -181,7 +182,7 @@ impl Gesture {
             Self::Move(g) => Some(g.base_state()),
             Self::Resize(g) => Some(g.base_state()),
             Self::Rotate(g) => Some(g.base_state()),
-            Self::Rect | Self::Pan => None,
+            Self::Rect(_) | Self::Pan => None,
         }
     }
 }
