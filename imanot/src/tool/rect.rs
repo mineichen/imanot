@@ -84,12 +84,12 @@ impl Tool for RectTool {
             let (image_width, image_height) = ctx.image.image.adjust.dimensions();
             let x = x.min(image_width.get() as usize - 1);
             let y = y.min(image_height.get() as usize - 1);
-            let x: u32 = x.try_into().unwrap();
-            let y: u32 = y.try_into().unwrap();
+            let x: u16 = x.try_into().unwrap();
+            let y: u16 = y.try_into().unwrap();
             let span = Span::new(x..x + 1, y);
             match self.mode {
                 Mode::Insert => {
-                    let ranges = SortedRanges::from(span);
+                    let ranges = SortedRanges::<u32>::from(span);
                     ctx.image
                         .masks
                         .on_layer(self.layer)
@@ -97,7 +97,7 @@ impl Tool for RectTool {
                         .add(ranges);
                 }
                 Mode::Clear => {
-                    let rect = Rect::from(span);
+                    let rect = Rect::from(Span::<u32>::from(span));
                     ctx.image
                         .masks
                         .on_layer(self.layer)

@@ -249,7 +249,7 @@ mod tests {
     use super::*;
     use crate::PixelAreaStack;
 
-    fn tracked_add(x: u32) -> HistoryAction {
+    fn tracked_add(x: u16) -> HistoryAction {
         HistoryAction {
             kind: HistoryActionKind::Add(HistoryActionAdd {
                 pixel_area: Span::new(x..x + 1, 0).into(),
@@ -259,7 +259,7 @@ mod tests {
         }
     }
 
-    fn untracked_add(x: u32) -> HistoryAction {
+    fn untracked_add(x: u16) -> HistoryAction {
         HistoryAction {
             kind: HistoryActionKind::Add(HistoryActionAdd {
                 pixel_area: Span::new(x..x + 1, 0).into(),
@@ -395,14 +395,14 @@ mod tests {
         let mut history = History::default();
         history.push(HistoryAction {
             kind: HistoryActionKind::Add(HistoryActionAdd {
-                pixel_area: Span::new(0..1, 0).into(),
+                pixel_area: Span::new(0u16..1, 0).into(),
             }),
             layer: AffectedLayer::Layer(0),
             tracked: true,
         });
         history.push(HistoryAction {
             kind: HistoryActionKind::Add(HistoryActionAdd {
-                pixel_area: Span::new(1..2, 0).into(),
+                pixel_area: Span::new(1u16..2, 0).into(),
             }),
             layer: AffectedLayer::Layer(1),
             tracked: true,
@@ -413,7 +413,7 @@ mod tests {
         assert_eq!(history.take_dirty(), Some(AffectedLayer::Layer(1)));
     }
 
-    fn untracked_add_area(x: u32, y: u32) -> HistoryAction {
+    fn untracked_add_area(x: u16, y: u16) -> HistoryAction {
         HistoryAction {
             kind: HistoryActionKind::Add(HistoryActionAdd {
                 pixel_area: Span::new(x..x + 2, y).into(),
@@ -448,7 +448,7 @@ mod tests {
         history.push(untracked_add_area(0, 0));
         history.push(untracked_add_area(0, 1));
         history.push(replace_action(
-            Span::new(4..6, 3).into(),
+            Span::new(4u16..6, 3).into(),
             AffectedLayer::Layer(1),
         ));
 
@@ -464,7 +464,7 @@ mod tests {
         history.push(untracked_add_area(0, 0));
         history.push(untracked_add_area(0, 1));
         history.push(replace_action(
-            Span::new(4..6, 3).into(),
+            Span::new(4u16..6, 3).into(),
             AffectedLayer::Unspecified,
         ));
 
@@ -481,7 +481,7 @@ mod tests {
         history.push(untracked_add_area(0, 1));
         history.push(untracked_add_area(0, 2));
         history.push(replace_action(
-            Span::new(4..6, 3).into(),
+            Span::new(4u16..6, 3).into(),
             AffectedLayer::Range(1, Some(3)),
         ));
 

@@ -206,12 +206,12 @@ impl<T: DoubleEndedIterator<Item = Option<TItem>>, TItem> DoubleEndedIterator
 
 #[cfg(test)]
 mod tests {
-    use std::num::NonZeroU32;
+    use std::num::NonZeroU16;
 
     use imask::{SortedRanges, Span};
 
     use super::*;
-    const NON_ZERO_10: NonZeroU32 = NonZeroU32::new(10).unwrap();
+    const NON_ZERO_10: NonZeroU16 = NonZeroU16::new(10).unwrap();
     #[test]
     fn allow_unordered() {
         let stack = PixelAreaStack::from_iter([
@@ -224,7 +224,7 @@ mod tests {
 
     #[test]
     fn test_end_index() {
-        let ranges = SortedRanges::from(Span::new(0..10, 0));
+        let ranges = SortedRanges::from(Span::new(0u16..10, 0));
         let example = PixelArea::from_ranges(ranges, [0, 0, 0, 255]);
         let x =
             PixelAreaStack::from_iter([(1, example.clone()), (3, example.clone()), (5, example)]);

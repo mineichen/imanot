@@ -1,5 +1,7 @@
 use egui::Pos2;
-use imask::{AffineTransformHeap, ClipSpanIter, ImageDimension, ImaskSet, Rect, SortedRanges};
+use imask::{
+    AffineTransformHeap, ClipSpanIter, ImageDimension, ImaskSet, Rect, SortedRanges, SpanCluster,
+};
 use nalgebra::Matrix3;
 
 use crate::{
@@ -56,28 +58,22 @@ pub(crate) fn clip_heap_to_image(
     img_rect: Rect<u32>,
 ) -> Option<ClipSpanIter<AffineTransformHeap, u32>> {
     heap.bounds().intersection(&img_rect)?;
-    Some(heap.clip(img_rect))
+    Some(heap.clip(img_rect).ok()?)
 }
 
 /// Find the 8-connected cluster of `ranges` containing pixel `(x, y)`.
 /// Returns `None` if no span covers the pixel.
-pub(crate) fn cluster_at(ranges: &SortedRanges<u32>, x: u32, y: u32) -> Option<SortedRanges<u32>> {
+pub(crate) fn cluster_at(ranges: &SortedRanges<u32>, x: u32, y: u32) -> Option<SpanCluster<u32>> {
     for cluster in ranges.spans::<u32>().cluster::<u32>() {
         // Fast reject on the tight cluster bounds before consuming spans.
-        if !cluster.bounds().contains(&x, &y) {
-            continue;
-        }
-        // Builds straight from the cluster stream with no intermediate `Vec`.
-        let Ok(candidate) = SortedRanges::try_from_span_iter_minbounds(cluster) else {
-            continue;
-        };
-        // Bounds may cover hollow areas of concave clusters; verify actual
-        // coverage and keep scanning on a miss.
-        if candidate
-            .spans::<u32>()
-            .any(|s| s.y == y && s.x.start <= x && x < s.x.end)
+        if cluster.bounds().contains(&x, &y)
+            && cluster
+                .clone()
+                .skip_while(|s| s.y < y)
+                .take_while(|s| s.y == y && s.x.start <= x)
+                .any(|s| x < s.x.end)
         {
-            return Some(candidate);
+            return Some(cluster);
         }
     }
     None
@@ -114,7 +110,7 @@ mod tests {
     /// Test-only `Vec` adapter: `Vec` is not `ImageDimension`, so tight
     /// bounds are tracked natively via `SpanBoundsBuilder` first.
     fn ranges_from_spans(spans: Vec<Span<u32>>) -> Option<SortedRanges<u32>> {
-        let tight: Rect<u32> = spans
+        let tight = spans
             .iter()
             .copied()
             .collect::<SpanBoundsBuilder<u32>>()
@@ -217,7 +213,7 @@ mod tests {
         let ranges = disjoint_rects();
         let left = cluster_at(&ranges, 0, 0).unwrap();
         assert_eq!(left.bounds(), Rect::new(0, 0, nz(2), nz(1)));
-        assert_eq!(left.len(), 1);
+        assert_eq!(left.clone().count(), 1);
         let right = cluster_at(&ranges, 6, 3).unwrap();
         assert_eq!(right.bounds(), Rect::new(5, 3, nz(2), nz(1)));
         // Pixels between/outside clusters select nothing.
@@ -230,6 +226,6 @@ mod tests {
         // 8-connectivity: diagonally touching pixels form one cluster.
         let ranges = ranges_from_spans(vec![Span::new(0..1, 0u32), Span::new(1..2, 1u32)]).unwrap();
         let cluster = cluster_at(&ranges, 0, 0).unwrap();
-        assert_eq!(cluster.len(), 2);
+        assert_eq!(cluster.count(), 2);
     }
 }

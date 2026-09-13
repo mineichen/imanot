@@ -1,4 +1,4 @@
-use std::num::NonZeroU32;
+use std::num::{NonZeroU16, NonZeroU32};
 
 use imask::{ImageDimension, SortedRanges, Span};
 
@@ -31,14 +31,14 @@ impl PixelArea {
         })
     }
 
-    pub fn single_pixel_total_color(x: u32, y: u32, len: NonZeroU32, color: [u8; 4]) -> Self {
+    pub fn single_pixel_total_color(x: u16, y: u16, len: NonZeroU16, color: [u8; 4]) -> Self {
         Self {
             pixels: Ranges::from(Span::new(x..x + len.get(), y)),
             color,
         }
     }
     #[cfg(test)]
-    pub fn single_range_total_black(x: u32, y: u32, len: NonZeroU32) -> Self {
+    pub fn single_range_total_black(x: u16, y: u16, len: NonZeroU16) -> Self {
         Self::single_pixel_total_color(x, y, len, [0, 0, 0, 255])
     }
 

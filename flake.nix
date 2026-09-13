@@ -176,6 +176,7 @@
                 pkgs.stdenv.cc.cc.lib
               ]}:\$LD_LIBRARY_PATH
               export RUST_BACKTRACE=1
+              export RUST_LOG=''${RUST_LOG:-imanot=debug}
               if [ \$# -eq 0 ]; then
                 exec "$PROJECT_ROOT/target/release/annotation-tool-app" ~/Downloads
               else
