@@ -151,6 +151,7 @@ fn locked_halves(base_half: Vector2<f64>, s: Vector2<f64>, d: Vector2<f64>) -> V
 /// so cancelling restores both consistently. The per-variant state lives in
 /// `GestureMove`/`GestureResize`/`GestureRotate`; this enum only tags which
 /// gesture is active and forwards to its methods.
+
 pub(crate) enum Gesture {
     Move(GestureMove),
     Resize(GestureResize),
