@@ -81,13 +81,8 @@ impl ActiveSelection {
     }
 
     pub(crate) fn rebase(&mut self, tip: Option<HistoryAction>) {
-        self.layers.retain_mut(|l| match l.committed.take() {
-            Some(committed) => {
-                l.original = committed.clone();
-                l.committed = Some(committed);
-                true
-            }
-            None => false,
+        self.layers.values_mut().for_each(|l| {
+            l.original = l.committed.clone();
         });
         self.total = Matrix3::identity();
         self.tip = tip;
@@ -114,7 +109,7 @@ impl ActiveSelection {
         // One lazy iterator per layer (analytic transform ∩ image), merged
         // into a single ordered, self-bounded span stream: no span is ever
         // collected.
-        let chains = self.layers.iter().filter_map(|ls| {
+        let chains = self.layers.values().filter_map(|ls| {
             let heap = AffineTransformHeap::new(ls.original.spans::<u32>(), &matrix).ok()?;
             clip_heap_to_image(heap, img_rect)
         });

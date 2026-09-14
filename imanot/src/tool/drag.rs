@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{collections::BTreeMap, sync::Arc};
 
 use egui::{CursorIcon, Pos2, Vec2};
 use futures::FutureExt;
@@ -98,15 +98,9 @@ impl DragTool {
     /// selection pixels?
     fn covers_on_layer(&self, layer: usize, x: u32, y: u32) -> bool {
         self.selection.as_ref().is_some_and(|sel| {
-            sel.layers.iter().any(|l| {
-                l.layer == layer
-                    && l.committed.as_ref().is_some_and(|c| {
-                        // O(1) bounds reject before walking spans.
-                        c.bounds().contains(&x, &y)
-                            && c.spans::<u32>()
-                                .any(|s| s.y == y && s.x.start <= x && x < s.x.end)
-                    })
-            })
+            sel.layers
+                .get(&layer)
+                .is_some_and(|l| l.committed.contains(x, y))
         })
     }
 
@@ -166,13 +160,7 @@ impl DragTool {
         // an unaffected layer has a pixel there — then a non-additive click
         // clears the selection below.
         let Some(idx) = masks.subgroups_stack().iter().rev().find_map(|(i, area)| {
-            (self.layer.affects(i)
-                && area.pixels.bounds().contains(&x, &y)
-                && area
-                    .pixels
-                    .spans::<u32>()
-                    .any(|s| s.y == y && s.x.contains(&x)))
-            .then_some(i)
+            (self.layer.affects(i) && area.pixels.contains(x, y)).then_some(i)
         }) else {
             if !additive {
                 self.drop_selection();
@@ -276,9 +264,9 @@ impl DragTool {
         // carries tight bounds (`minbounds` over the imask-clipped spans),
         // so this is O(layers) with no span iteration.
         let layers = layers
-            .map(|(layer, ranges, background)| LayerSelection::fresh(layer, ranges, background))
-            .collect::<Vec<_>>();
-        let Some(content) = union_bounds(layers.iter().map(|x| x.original.bounds())) else {
+            .map(|(layer, ranges, background)| (layer, LayerSelection::fresh(ranges, background)))
+            .collect::<BTreeMap<_, _>>();
+        let Some(content) = union_bounds(layers.values().map(|x| x.original.bounds())) else {
             // No pixels: no box to show, drop any previous selection.
             self.drop_selection();
             return;
@@ -418,47 +406,47 @@ impl DragTool {
         let matrix = sel.total;
         // Transform all layers from the pristine originals first (one small
         // per-layer `Vec`, no span is ever collected).
-        let computed: Vec<Option<SortedRanges<u32>>> = sel
+
+        let mut should_abort = true;
+        let computed = sel
             .layers
-            .iter()
-            .map(|ls| transform_layer(&ls.original, &matrix, img_rect))
-            .collect();
-        if sel
-            .layers
-            .iter()
-            .zip(&computed)
-            .all(|(ls, new)| *new == ls.committed)
-        {
+            .iter_mut()
+            .map(|(idx, ls)| {
+                let new = transform_layer(&ls.original, &matrix, img_rect);
+                should_abort &= new.as_ref() == Some(&ls.committed);
+                (idx, ls, new)
+            })
+            .collect::<Vec<_>>();
+        if should_abort {
             return;
         }
         let mut first = true;
-        for (ls, new) in sel.layers.iter_mut().zip(computed) {
-            let layer = ls.layer;
+        let mut clear = true;
+        for (&layer, ls, new) in computed {
             // Re-add background under the cleared footprint in the same hook:
             // clearing `committed` spans would otherwise erase non-selected
             // pixels a previous commit absorbed (exact overlap on landing, or
             // rasterization fringe). Empty in the common no-overlap case.
             let restore = ls.restore();
-            if let Some(old) = ls.committed.clone() {
-                push_clear(masks, layer, old, first);
-                first = false;
+            push_clear(masks, layer, ls.committed.clone(), first);
+            first = false;
+            if let Some(new) = new {
+                push_add(masks, layer, new.clone(), false);
+
+                clear = false;
+                ls.committed = new;
+                if let Some(restore) = restore {
+                    push_add(masks, layer, restore, false);
+                }
             }
-            if let Some(new) = &new {
-                push_add(masks, layer, new.clone(), first);
-                first = false;
-            }
-            if let Some(restore) = restore {
-                push_add(masks, layer, restore, false);
-            }
-            ls.committed = new;
         }
-        if sel.layers.iter().all(|l| l.committed.is_none()) {
+        sel.tip = masks.last_history_action();
+        if clear {
             // Nothing visible left (all moved out of the image): no box to
             // show, drop the selection. The clears are still one undo step.
             self.drop_selection();
             return;
         }
-        sel.tip = masks.last_history_action();
         // The preview stays valid across commits: it already shows
         // `transform(original, total)`, which is exactly what was placed, so
         // dropping the selection needs no re-rasterization.
@@ -476,15 +464,13 @@ impl DragTool {
         };
         self.settle();
         let mut first = true;
-        for ls in sel.logic.layers {
+        for (layer, ls) in sel.logic.layers.into_iter() {
             let restore = ls.restore();
-            if let Some(committed) = ls.committed {
-                push_clear(masks, ls.layer, committed, first);
-                first = false;
+            push_clear(masks, layer, ls.committed, first);
+            first = false;
 
-                if let Some(restore) = restore {
-                    push_add(masks, ls.layer, restore, false);
-                }
+            if let Some(restore) = restore {
+                push_add(masks, layer, restore, false);
             }
         }
     }
@@ -524,7 +510,6 @@ impl Tool for DragTool {
                     // Restored frame and matrix invalidate the uploaded pixels.
                     sel.preview.hide();
                 }
-                self.settle();
             } else {
                 self.drop_selection();
             }
@@ -597,6 +582,7 @@ impl Tool for DragTool {
             }
             None => {
                 if ctx.response.drag_started() && self.begin_gesture(&mut ctx, img_w, img_h) {
+                    // Whats that??
                     PanTool::default().handle_interaction(ctx);
                     return;
                 } else if ctx.response.clicked()
@@ -662,10 +648,14 @@ mod tests {
 
     /// Pixel area of the first layer's committed selection content.
     fn committed_area(tool: &DragTool) -> usize {
-        tool.selection.as_ref().unwrap().layers[0]
-            .committed
+        tool.selection
             .as_ref()
-            .unwrap()
+            .expect("Selection is active")
+            .layers
+            .values()
+            .next()
+            .expect("Has at least one layer")
+            .committed
             .spans::<u32>()
             .map(|s| (s.x.end - s.x.start) as usize)
             .sum()
@@ -739,13 +729,21 @@ mod tests {
         tool.selection = Some(ActiveSelection::from_logic(ActiveSelectionLogic {
             total: Matrix3::identity(),
             frame: Frame::around(original.bounds()),
-            layers: vec![LayerSelection {
-                layer: 0,
-                original,
-                committed: masks.subgroups_stack().get(0).map(|a| a.pixels.clone()),
-                // Test scaffolding: no outsiders to restore.
-                background: None,
-            }],
+            layers: masks
+                .subgroups_stack()
+                .get(0)
+                .map(|a| {
+                    (
+                        0,
+                        LayerSelection {
+                            original,
+                            committed: a.pixels.clone(), // Test scaffolding: no outsiders to restore.
+                            background: None,
+                        },
+                    )
+                })
+                .into_iter()
+                .collect(),
             tip: masks.last_history_action(),
         }));
     }
@@ -820,8 +818,15 @@ mod tests {
         tool.commit(&mut masks, img_rect());
         // Pixels landed, outsiders intact, and the preview survived the drop.
         assert_eq!(
-            tool.selection.as_ref().unwrap().layers[0].committed,
-            Some(rect_ranges(15, 10, nz(10), nz(5)))
+            tool.selection
+                .as_ref()
+                .unwrap()
+                .layers
+                .values()
+                .next()
+                .unwrap()
+                .committed,
+            rect_ranges(15, 10, nz(10), nz(5))
         );
         assert!(outsider_block_ok(&masks));
         assert!(tool.selection.as_ref().unwrap().preview.is_visible());
@@ -875,8 +880,7 @@ mod tests {
         let sel = tool.selection.as_ref().unwrap();
         // Same layer unions into a single entry (like rect-select).
         assert_eq!(sel.layers.len(), 1);
-        assert_eq!(sel.layers[0].layer, 0);
-        assert_eq!(sel.layers[0].original.len(), 2);
+        assert_eq!(sel.layers.get(&0).unwrap().original.len(), 2);
         // Frame expanded to contain both clusters.
         assert!(sel.frame.half.x >= 3.5);
     }
@@ -908,7 +912,7 @@ mod tests {
         click(&mut tool, &mut masks, 51.0, 50.0, true);
         let sel = tool.selection.as_ref().unwrap();
         assert_eq!(sel.layers.len(), 2);
-        let mut layers: Vec<usize> = sel.layers.iter().map(|l| l.layer).collect();
+        let mut layers: Vec<usize> = sel.layers.keys().copied().collect();
         layers.sort_unstable();
         assert_eq!(layers, vec![0, 1]);
     }
@@ -948,7 +952,7 @@ mod tests {
         assert_eq!(sel.layers.len(), 1);
         // Rebaked original is the union of the placed pixels (moved cluster A)
         // and the newly added cluster B.
-        let entry0 = sel.layers.iter().find(|l| l.layer == 0).unwrap();
+        let entry0 = sel.layers.get(&0).unwrap();
         let moved_a = transform_layer(
             &ranges_from_spans(vec![Span::new(0..2, 0u32)]).unwrap(),
             &Matrix3::new_translation(&Vector2::new(5.0, 0.0)),
@@ -958,7 +962,7 @@ mod tests {
         let cluster_b = ranges_from_spans(vec![Span::new(5..7, 3u32)]).unwrap();
         let expected = union_ranges(&moved_a, &cluster_b).unwrap();
         assert_eq!(entry0.original, expected);
-        assert_eq!(entry0.committed, Some(expected));
+        assert_eq!(entry0.committed, expected);
     }
 
     #[test]
@@ -978,7 +982,7 @@ mod tests {
         tool.select_rect(&masks, &b, true);
         let sel = tool.selection.as_ref().unwrap();
         assert_eq!(sel.layers.len(), 1);
-        let bounds = sel.layers[0].original.bounds();
+        let bounds = sel.layers.values().next().unwrap().original.bounds();
         assert_eq!((bounds.x, bounds.y), (0, 0));
         assert_eq!(
             (
@@ -999,7 +1003,16 @@ mod tests {
         let mut tool = DragTool::default();
         click(&mut tool, &mut masks, 0.0, 0.0, false);
         click(&mut tool, &mut masks, 6.0, 3.0, true);
-        let union_original = tool.selection.as_ref().unwrap().layers[0].original.clone();
+        let union_original = tool
+            .selection
+            .as_ref()
+            .unwrap()
+            .layers
+            .values()
+            .next()
+            .unwrap()
+            .original
+            .clone();
         assert_eq!(union_original.len(), 2);
         let (frame, _) = {
             let sel = tool.selection.as_ref().unwrap();
@@ -1064,10 +1077,14 @@ mod tests {
         tool.select_layers(&masks, 0..2);
         let sel = tool.selection.as_ref().unwrap();
         assert_eq!(sel.layers.len(), 2);
-        assert_eq!(sel.layers[0].layer, 0);
-        assert_eq!(sel.layers[0].original, rect_ranges(0, 0, nz(2), nz(2)));
-        assert_eq!(sel.layers[1].layer, 1);
-        assert_eq!(sel.layers[1].original, rect_ranges(50, 0, nz(2), nz(2)));
+        assert_eq!(
+            sel.layers.get(&0).unwrap().original,
+            rect_ranges(0, 0, nz(2), nz(2))
+        );
+        assert_eq!(
+            sel.layers.get(&1).unwrap().original,
+            rect_ranges(50, 0, nz(2), nz(2))
+        );
         assert_eq!(sel.total, Matrix3::identity());
         // Frame tightly covers both layers, nothing else.
         assert_eq!(sel.frame.center, Point2::new(26.0, 1.0));
@@ -1083,8 +1100,10 @@ mod tests {
         tool.select_layers(&masks, 2);
         let sel = tool.selection.as_ref().unwrap();
         assert_eq!(sel.layers.len(), 1);
-        assert_eq!(sel.layers[0].layer, 2);
-        assert_eq!(sel.layers[0].original, rect_ranges(0, 50, nz(2), nz(2)));
+        assert_eq!(
+            sel.layers.get(&2).unwrap().original,
+            rect_ranges(0, 50, nz(2), nz(2))
+        );
     }
 
     #[test]
@@ -1106,7 +1125,7 @@ mod tests {
         tool.select_layers(&masks, 1..2);
         let sel = tool.selection.as_ref().unwrap();
         assert_eq!(sel.layers.len(), 1);
-        assert_eq!(sel.layers[0].layer, 1);
+        assert!(sel.layers.get(&1).is_some());
     }
 
     #[test]

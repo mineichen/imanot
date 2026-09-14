@@ -1,4 +1,4 @@
-use std::iter::FusedIterator;
+use std::{collections::BTreeMap, iter::FusedIterator};
 
 use imask::{ImageDimension, ImaskSet, PipelineError, SortedRanges, SortedRangesSpanBuilder, Span};
 use nalgebra::Matrix3;
@@ -17,24 +17,18 @@ use crate::HistoryAction;
 /// footprint, so pixels outside the original selection always remain
 /// unchanged — even ones a previous commit overlapped.
 pub(crate) struct LayerSelection {
-    pub(crate) layer: usize,
     pub(crate) original: SortedRanges<u32>,
-    pub(crate) committed: Option<SortedRanges<u32>>,
+    pub(crate) committed: SortedRanges<u32>,
     pub(crate) background: Option<SortedRanges<u32>>,
 }
 
 impl LayerSelection {
     /// Fresh snapshot: nothing transformed yet, so placed pixels equal the
     /// pristine original.
-    pub(crate) fn fresh(
-        layer: usize,
-        ranges: SortedRanges<u32>,
-        background: Option<SortedRanges<u32>>,
-    ) -> Self {
+    pub(crate) fn fresh(ranges: SortedRanges<u32>, background: Option<SortedRanges<u32>>) -> Self {
         Self {
-            layer,
             original: ranges.clone(),
-            committed: Some(ranges),
+            committed: ranges,
             background,
         }
     }
@@ -43,9 +37,12 @@ impl LayerSelection {
     /// same hook as the Clear. `None` when nothing overlaps (the common
     /// case) — then commit stays a Clear + Add pair.
     pub(crate) fn restore(&self) -> Option<SortedRanges<u32>> {
-        match (self.background.as_ref(), self.committed.as_ref()) {
-            (Some(bg), Some(committed)) => {
-                let under = bg.spans::<u32>().intersect(committed.spans::<u32>()).ok()?;
+        match self.background.as_ref() {
+            Some(bg) => {
+                let under = bg
+                    .spans::<u32>()
+                    .intersect(self.committed.spans::<u32>())
+                    .ok()?;
                 SortedRanges::try_from_span_iter_minbounds(under).ok()
             }
             _ => None,
@@ -58,7 +55,7 @@ impl LayerSelection {
 /// lives in the owning [`super::ActiveSelection`] wrapper next to this, which
 /// clears it whenever the logic mutates underneath a live texture.
 pub(crate) struct ActiveSelectionLogic {
-    pub(crate) layers: Vec<LayerSelection>,
+    pub(crate) layers: BTreeMap<usize, LayerSelection>,
     /// Accumulated gesture transform, applied uniformly to every layer's
     /// pristine `original`. Only ever extended by gesture deltas, reset to
     /// identity on rebase (see `rebase`).
@@ -84,7 +81,7 @@ impl ActiveSelectionLogic {
         Self {
             total: Matrix3::identity(),
             frame: Frame::around(ranges.bounds()),
-            layers: vec![LayerSelection::fresh(idx, ranges, background)],
+            layers: std::iter::once((idx, LayerSelection::fresh(ranges, background))).collect(),
             tip,
         }
     }
@@ -107,24 +104,21 @@ impl ActiveSelectionLogic {
         background: Option<SortedRanges<u32>>,
     ) {
         self.frame.expand_to_cover(ranges.bounds());
-        if let Some(entry) = self.layers.iter_mut().find(|l| l.layer == layer_id) {
+        if let Some(entry) = self.layers.get_mut(&layer_id) {
             entry.background = entry
                 .background
                 .take()
                 .and_then(|bg| subtract_ranges(&bg, ranges.spans()));
             if let (Some(original), Some(committed)) = (
                 union_ranges(&entry.original, &ranges),
-                entry
-                    .committed
-                    .as_ref()
-                    .and_then(|c| union_ranges(c, &ranges)),
+                union_ranges(&entry.committed, &ranges),
             ) {
                 entry.original = original;
-                entry.committed = Some(committed);
+                entry.committed = committed;
             }
         } else {
-            self.layers
-                .push(LayerSelection::fresh(layer_id, ranges, background));
+            let fresh = LayerSelection::fresh(ranges, background);
+            self.layers.insert(layer_id, fresh);
         }
     }
 }
