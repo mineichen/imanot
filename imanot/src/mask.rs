@@ -1028,8 +1028,7 @@ mod tests {
         .unwrap();
         mask_image.add(layer0);
 
-        let spans1 =
-            [Span::new(0u32..5, 3), Span::new(0..3, 5)].with_bounds(WIDTH_10, WIDTH_10);
+        let spans1 = [Span::new(0u32..5, 3), Span::new(0..3, 5)].with_bounds(WIDTH_10, WIDTH_10);
         let layer1 = SortedRanges::try_from_span_iter(spans1).unwrap();
         mask_image.add(layer1);
 

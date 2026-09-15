@@ -244,7 +244,12 @@ mod tests {
     fn expand_to_cover_wraps_content_bounds() {
         // Frame hugs the contained content, not the queried box: the frame
         // shrinks to the union of its extent and the content bounds.
-        let mut frame = Frame::around(Rect::new(5, 5, NonZeroU32::new(4).unwrap(), NonZeroU32::new(2).unwrap()));
+        let mut frame = Frame::around(Rect::new(
+            5,
+            5,
+            NonZeroU32::new(4).unwrap(),
+            NonZeroU32::new(2).unwrap(),
+        ));
         frame.expand_to_cover(Rect::new(
             0,
             0,
