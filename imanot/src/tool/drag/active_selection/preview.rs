@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use egui::{Color32, ColorImage, Pos2, Rect as EguiRect, TextureHandle, TextureOptions, Vec2};
-use imask::{ImageDimension, Rect, Span};
+use imask::{ImageDimension, Roi, Span};
 
 use crate::ImagePainter;
 
@@ -60,12 +60,12 @@ impl PreviewState {
         spans: impl Iterator<Item = Span<u32>> + ImageDimension,
         allow_reposition: bool,
     ) {
-        if allow_reposition && self.try_reposition(painter, spans.bounds()) {
+        if allow_reposition && self.try_reposition(painter, spans.roi()) {
             return;
         }
-        let bounds = spans.bounds();
-        let w = bounds.width.get() as usize;
-        let h = bounds.height.get() as usize;
+        let bounds = spans.roi();
+        let w = bounds.width().get() as usize;
+        let h = bounds.height().get() as usize;
         let img = self.stage(w, h);
         fill_spans(&mut img.pixels, spans, bounds);
         match self.texture.as_mut() {
@@ -78,7 +78,7 @@ impl PreviewState {
                 ));
             }
         }
-        self.origin = [bounds.x, bounds.y];
+        self.origin = [bounds.x.start, bounds.y.start];
         self.size = [w, h];
         self.paint(painter);
     }
@@ -88,13 +88,13 @@ impl PreviewState {
     /// pixels don't cover `bounds` — the caller must `show` instead.
     ///
     /// Only valid for pure translations: same size means same pixels.
-    pub(crate) fn try_reposition(&mut self, painter: &mut ImagePainter, bounds: Rect<u32>) -> bool {
+    pub(crate) fn try_reposition(&mut self, painter: &mut ImagePainter, bounds: Roi<u32>) -> bool {
         if !self.texture.is_some()
-            || self.size != [bounds.width.get() as usize, bounds.height.get() as usize]
+            || self.size != [bounds.width().get() as usize, bounds.height().get() as usize]
         {
             return false;
         }
-        self.origin = [bounds.x, bounds.y];
+        self.origin = [bounds.x.start, bounds.y.start];
         self.paint(painter);
         true
     }
@@ -165,17 +165,17 @@ impl PreviewState {
 /// Spans must come pre-clipped to `bounds` in non-decreasing cell order
 /// (guaranteed when the stream carries its own `ImageDimension`, e.g. a
 /// `UnionAll` over clipped chains): every span lands inside the image.
-fn fill_spans(pixels: &mut [Color32], spans: impl Iterator<Item = Span<u32>>, bounds: Rect<u32>) {
-    let w = bounds.width.get() as usize;
-    let h = bounds.height.get() as usize;
+fn fill_spans(pixels: &mut [Color32], spans: impl Iterator<Item = Span<u32>>, bounds: Roi<u32>) {
+    let w = bounds.width().get() as usize;
+    let h = bounds.height().get() as usize;
     debug_assert_eq!(pixels.len(), w * h);
     let mut cursor = 0;
     for span in spans {
-        let y = span.y - bounds.y;
-        debug_assert!(y < bounds.height.get());
-        debug_assert!(span.x.start >= bounds.x && span.x.end <= bounds.x + bounds.width.get());
-        let start = y as usize * w + (span.x.start - bounds.x) as usize;
-        let end = y as usize * w + (span.x.end - bounds.x) as usize;
+        let y = span.y - bounds.y.start;
+        debug_assert!(y < h as _);
+        debug_assert!(span.x.start >= bounds.x.start && span.x.end <= bounds.x.start + w as u32);
+        let start = y as usize * w + (span.x.start - bounds.x.start) as usize;
+        let end = y as usize * w + (span.x.end - bounds.x.start) as usize;
         debug_assert!(start >= cursor && end <= pixels.len());
         pixels[cursor..start].fill(Color32::TRANSPARENT);
         pixels[start..end].fill(PREVIEW_COLOR);
@@ -186,17 +186,10 @@ fn fill_spans(pixels: &mut [Color32], spans: impl Iterator<Item = Span<u32>>, bo
 
 #[cfg(test)]
 mod tests {
-    use std::num::NonZeroU32;
-
     use super::*;
 
-    fn bounds(x: u32, y: u32, w: u32, h: u32) -> Rect<u32> {
-        Rect::new(
-            x,
-            y,
-            NonZeroU32::new(w).unwrap(),
-            NonZeroU32::new(h).unwrap(),
-        )
+    fn bounds(x: u32, y: u32, w: u32, h: u32) -> Roi<u32> {
+        Roi::new(x..x + w, y..y + h)
     }
 
     #[test]
@@ -205,7 +198,7 @@ mod tests {
         fill_spans(
             &mut pixels,
             vec![Span::new(11..13, 21)].into_iter(),
-            bounds(10, 20, 4, 3),
+            Roi::new(10..14, 20..23),
         );
         // (11, 21) and (12, 21) land at local (1, 1) and (2, 1).
         assert_eq!(pixels[5], PREVIEW_COLOR);
@@ -222,7 +215,7 @@ mod tests {
         fill_spans(
             &mut pixels,
             vec![Span::new(10..11, 20)].into_iter(),
-            bounds(10, 20, 2, 2),
+            Roi::new(10..12, 20..22),
         );
         assert_eq!(pixels[0], PREVIEW_COLOR);
         assert!(pixels[1..].iter().all(|&px| px == Color32::TRANSPARENT));

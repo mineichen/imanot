@@ -1,15 +1,14 @@
-use std::{collections::BTreeMap, sync::Arc};
+use std::sync::Arc;
 
 use egui::{CursorIcon, Pos2, Vec2};
 use futures::FutureExt;
-use imask::{ImageDimension, ImaskSet, Rect, SortedRanges};
+use imask::{ImageDimension, ImaskSet, Roi, SortedRanges, Span};
 #[cfg(test)]
-use imask::{Span, SpanBoundsBuilder, WithRoi};
-use nalgebra::{Matrix3, Point2};
+use imask::{SpanBoundsBuilder, WithRoi};
+use nalgebra::Point2;
 
 use crate::{
-    AffectedLayer, HistoryAction, MaskImage, PanTool, RectSelection, RectSelectionResult, Tool,
-    ToolContext, ToolFactory,
+    AffectedLayer, MaskImage, RectSelection, RectSelectionResult, Tool, ToolContext, ToolFactory,
     tool::drag::active_selection::logic::subtract_ranges_collect_subtrahend,
 };
 
@@ -19,11 +18,10 @@ mod gesture;
 mod overlay;
 mod transform;
 
-use active_selection::{ActiveSelection, ActiveSelectionLogic, LayerSelection, subtract_ranges};
-use frame::{Frame, union_bounds};
+use active_selection::{ActiveSelection, subtract_ranges};
 use gesture::{Gesture, GestureMove, GestureResize, GestureRotate};
 use overlay::{HoverPart, hit_test, resize_cursor};
-use transform::{clamp_pixel, cluster_at, push_add, push_clear, transform_layer};
+use transform::{clamp_pixel, cluster_at};
 
 /// Drag-select + transform tool. See `DRAG_TOOL_REFINED.md` for the full plan.
 ///
@@ -66,7 +64,7 @@ impl DragTool {
     /// Drop any in-progress gesture. Selection replacement and drops need no
     /// explicit preview handling: the preview lives inside `ActiveSelection`
     /// and dies or starts fresh with it. In-place selection mutations reset
-    /// it at the mutation point (`rebase`, `merge_layer`).
+    /// it at the mutation point (`merge_layers`).
     fn settle(&mut self) {
         self.gesture = None;
     }
@@ -78,31 +76,12 @@ impl DragTool {
         self.settle();
     }
 
-    /// Bake the currently placed pixels into the snapshot originals (a pure
-    /// relabel — no history writes, no re-rasterization) and reset the
-    /// accumulated transform. Drops layers with nothing visible. Called before
-    /// structurally changing the selection (shift-add), so later gestures
-    /// transform the newly added pixels and the old ones uniformly.
-    /// Takes the new history tip so the staleness guard is always re-armed
-    /// together with the rebase — callers must not set `tip` separately.
-    fn rebase(&mut self, tip: Option<HistoryAction>) {
-        if let Some(sel) = self.selection.as_mut() {
-            sel.rebase(tip);
-            if sel.logic.layers.is_empty() {
-                self.drop_selection();
-            }
-        }
-    }
-
     /// Is pixel `(x, y)` already covered by `layer`'s currently placed
     /// selection pixels?
     fn covers_on_layer(&self, layer: usize, x: u32, y: u32) -> bool {
-        self.selection.as_ref().is_some_and(|sel| {
-            sel.logic
-                .layers
-                .get(&layer)
-                .is_some_and(|l| l.committed.contains(x, y))
-        })
+        self.selection
+            .as_ref()
+            .is_some_and(|sel| sel.covers_on_layer(layer, x, y))
     }
 
     /// Drop the selection if the history tip changed underneath it (external
@@ -111,7 +90,7 @@ impl DragTool {
         if self
             .selection
             .as_ref()
-            .is_some_and(|sel| sel.logic.tip != masks.last_history_action())
+            .is_some_and(|sel| sel.is_stale(masks.last_history_action()))
         {
             self.drop_selection();
         }
@@ -150,11 +129,11 @@ impl DragTool {
         &mut self,
         masks: &mut MaskImage,
         pointer: Pos2,
-        img_rect: Rect<u32>,
+        img_roi: Roi<u32>,
         additive: bool,
     ) {
-        let img_w = img_rect.width.get() as usize;
-        let img_h = img_rect.height.get() as usize;
+        let img_w = img_roi.width().get() as usize;
+        let img_h = img_roi.height().get() as usize;
         let (x, y) = clamp_pixel(pointer, img_w, img_h);
         // Topmost layer at the pixel restricted to this tool's `AffectedLayer`:
         // a click is "empty space" when no *affected* layer covers it, even if
@@ -187,7 +166,12 @@ impl DragTool {
         let (background, original) = subtract_ranges_collect_subtrahend(&area.pixels, cluster);
         let Ok(original) = original else { return };
 
-        if !additive {
+        if additive && let Some(sel) = &mut self.selection {
+            sel.merge_layers(
+                std::iter::once((idx, original, background)),
+                masks.last_history_action(),
+            );
+        } else {
             // New click without Shift replaces the old selection.
             self.selection = Some(ActiveSelection::fresh_single(
                 idx,
@@ -195,21 +179,6 @@ impl DragTool {
                 background,
                 masks.last_history_action(),
             ));
-            return;
-        }
-        self.rebase(masks.last_history_action());
-        match &mut self.selection {
-            Some(sel) => {
-                sel.merge_layer(idx, original, background);
-            }
-            selection @ None => {
-                *selection = Some(ActiveSelection::fresh_single(
-                    idx,
-                    original,
-                    background,
-                    masks.last_history_action(),
-                ));
-            }
         }
     }
 
@@ -219,7 +188,9 @@ impl DragTool {
     /// existing selection instead of replacing it; an empty rect then keeps
     /// the selection unchanged.
     fn select_rect(&mut self, masks: &MaskImage, result: &RectSelectionResult, additive: bool) {
-        let roi = result.rect();
+        // `RectSelection` is shared tool infra still on `Rect`; convert at
+        // the boundary — everything inside the drag tool uses `Roi`.
+        let roi = Roi::from(result.rect());
         let layer = self.layer;
         let mut layers = masks.subgroups_stack().iter().filter_map(|(idx, area)| {
             if !layer.affects(idx) {
@@ -235,15 +206,12 @@ impl DragTool {
             Some((idx, ranges, background))
         });
         if let Some(first) = layers.next() {
-            if additive && self.selection.is_some() {
-                self.rebase(masks.last_history_action());
-                if let Some(sel) = self.selection.as_mut() {
-                    sel.merge_layer(first.0, first.1, first.2);
-                    for (idx, ranges, background) in layers {
-                        sel.merge_layer(idx, ranges, background);
-                    }
-                    return;
-                }
+            if additive && let Some(sel) = self.selection.as_mut() {
+                sel.merge_layers(
+                    std::iter::once(first).chain(layers),
+                    masks.last_history_action(),
+                );
+                return;
             }
             self.select_rect_fresh(masks, std::iter::once(first).chain(layers));
         } else {
@@ -261,62 +229,30 @@ impl DragTool {
         masks: &MaskImage,
         layers: impl Iterator<Item = (usize, SortedRanges<u32>, Option<SortedRanges<u32>>)>,
     ) {
-        // Union of the per-layer content bounds. Each snapshot already
-        // carries tight bounds (`minbounds` over the imask-clipped spans),
-        // so this is O(layers) with no span iteration.
-        let layers = layers
-            .map(|(layer, ranges, background)| (layer, LayerSelection::fresh(ranges, background)))
-            .collect::<BTreeMap<_, _>>();
-        let Some(content) = union_bounds(layers.values().map(|x| x.original.bounds())) else {
-            // No pixels: no box to show, drop any previous selection.
-            self.drop_selection();
-            return;
-        };
-
-        self.selection = Some(ActiveSelection::from_logic(ActiveSelectionLogic {
-            total: Matrix3::identity(),
-            layers,
-            frame: Frame::around(content),
-            tip: masks.last_history_action(),
-        }));
+        // Each snapshot already carries tight bounds (`minbounds` over the
+        // imask-clipped spans); the frame hugs the contained pixels, never
+        // the queried boxes. `None` means no pixels: no box to show.
+        self.selection = ActiveSelection::fresh_from_clipped(layers, masks.last_history_action());
+        if self.selection.is_none() {
+            self.settle();
+        }
     }
 
-    /// Programmatically replace the selection with all pixels of the layers
-    /// matched by `layers` (any `impl Into<AffectedLayer>`: a single index,
-    /// `0..3`, `..`, …). Behaves like a fresh selection: the layer contents
-    /// are snapshotted as pristine originals, the frame tightly covers all
+    /// Programmatically replace the selection from raw per-layer span streams:
+    /// `(layer index, spans carrying their own bounds)`, e.g.
+    /// `masks.subgroups_stack().iter().map(|(i, a)| (i, a.pixels.spans()))`.
+    /// Behaves like a fresh selection: tight ranges are rebuilt per layer and
+    /// snapshotted as pristine originals, the frame tightly covers all
     /// selected pixels and any in-progress gesture is dropped. Layers without
     /// visible pixels are skipped; if nothing matches, the selection is
     /// dropped (an empty box is never shown). Unlike click/rect selection this
     /// does not intersect with the tool's own `AffectedLayer` filter — the
     /// caller names the layers explicitly.
-    pub fn select_layers(&mut self, masks: &MaskImage, layers: impl Into<AffectedLayer>) {
-        let layers = layers.into();
-        let mut logic: Option<ActiveSelectionLogic> = None;
-        for (idx, area) in masks.subgroups_stack().iter() {
-            if !layers.affects(idx) {
-                continue;
-            }
-            // Rebuild tight ranges from the spans: attached bounds may cover
-            // the whole image (e.g. layers loaded from storage) and must not
-            // size the selection or the transform output.
-            let Ok(ranges) = SortedRanges::try_from_span_iter_minbounds(area.pixels.spans::<u32>())
-            else {
-                continue;
-            };
-            match &mut logic {
-                Some(sel) => sel.merge_layer(idx, ranges, None),
-                logic @ None => {
-                    *logic = Some(ActiveSelectionLogic::fresh_single(
-                        idx,
-                        ranges,
-                        None,
-                        masks.last_history_action(),
-                    ));
-                }
-            }
-        }
-        self.selection = logic.map(ActiveSelection::from_logic);
+    pub fn select_layers<S>(&mut self, masks: &MaskImage, layers: impl Iterator<Item = (usize, S)>)
+    where
+        S: Iterator<Item = Span<u32>> + ImageDimension,
+    {
+        self.selection = ActiveSelection::fresh_from_spans(layers, masks.last_history_action());
         self.settle();
     }
     /// Decide what a fresh drag does and store it in `self.gesture`.
@@ -336,11 +272,7 @@ impl DragTool {
         };
         let pointer = ctx.painter.screen_to_image(press_screen);
         let press = Point2::new(pointer.x as f64, pointer.y as f64);
-        let Some((frame, total)) = self
-            .selection
-            .as_ref()
-            .map(|s| (s.logic.frame, s.logic.total))
-        else {
+        let Some((frame, total)) = self.selection.as_ref().map(|s| s.snapshot_transform()) else {
             // No selection: rect-select, or pan on empty space.
             return self.start_empty_space_gesture(ctx, pointer, img_w, img_h);
         };
@@ -394,109 +326,48 @@ impl DragTool {
             return;
         };
         if let Some((frame, total)) = gesture.and_then(|g| g.apply(pointer, shift)) {
-            sel.logic.frame = frame;
-            sel.logic.total = total;
+            sel.set_transform(frame, total);
         }
     }
 
-    /// Commit the current transform: Clear previously committed ranges, Add
-    /// freshly transformed originals. First action is `tracked`, the rest are
-    /// not, so one ctrl-Z reverts the whole gesture across all layers. If
-    /// nothing remains visible, the selection is dropped — an empty box is
+    /// Commit the current transform (see [`ActiveSelection::commit_transform`]).
+    /// If nothing remains visible, the selection is dropped — an empty box is
     /// never shown.
-    fn commit(&mut self, masks: &mut MaskImage, img_rect: Rect<u32>) {
-        let Some(sel) = self.selection.as_mut() else {
-            return;
-        };
-        let matrix = sel.logic.total;
-        // Transform all layers from the pristine originals first (one small
-        // per-layer `Vec`, no span is ever collected).
-
-        let mut should_abort = true;
-        let computed = sel
-            .logic
-            .layers
-            .iter_mut()
-            .map(|(idx, ls)| {
-                let new = transform_layer(&ls.original, &matrix, img_rect);
-                should_abort &= new.as_ref() == Some(&ls.committed);
-                (idx, ls, new)
-            })
-            .collect::<Vec<_>>();
-        if should_abort {
-            return;
-        }
-        let mut first = true;
-        let mut clear = true;
-        for (&layer, ls, new) in computed {
-            // Re-add background under the cleared footprint in the same hook:
-            // clearing `committed` spans would otherwise erase non-selected
-            // pixels a previous commit absorbed (exact overlap on landing, or
-            // rasterization fringe). Empty in the common no-overlap case.
-            let restore = ls
-                .restore()
-                .and_then(|i| SortedRanges::try_from_span_iter(i).ok());
-            push_clear(masks, layer, ls.committed.clone(), first);
-            first = false;
-            if let Some(new) = new {
-                push_add(masks, layer, new.clone(), false);
-
-                clear = false;
-                ls.committed = new;
-                if let Some(restore) = restore {
-                    push_add(masks, layer, restore, false);
-                }
+    fn commit(&mut self, masks: &mut MaskImage, img_roi: Roi<u32>) {
+        if let Some(sel) = self.selection.take() {
+            if let Some(sel) = sel.commit_transform(masks, img_roi) {
+                self.selection = Some(sel);
+            } else {
+                self.settle();
             }
-        }
-        sel.logic.tip = masks.last_history_action();
-        if clear {
-            // Nothing visible left (all moved out of the image): no box to
-            // show, drop the selection. The clears are still one undo step.
-            self.drop_selection();
-            return;
-        }
-        // The preview stays valid across commits: it already shows
-        // `transform(original, total)`, which is exactly what was placed, so
-        // dropping the selection needs no re-rasterization.
+        };
     }
 
     /// Delete all ranges in the current selection: Clear the currently placed
-    /// (`committed`) ranges on every selected layer, then drop the selection.
+    /// ranges on every selected layer, then drop the selection.
     /// First action is `tracked`, the rest are not, so one ctrl-Z reverts the
     /// whole delete across all layers. Uncommitted gesture deltas are
     /// discarded — the mask itself is never touched during a gesture, so
     /// there is nothing to undo there.
     fn delete_selection(&mut self, masks: &mut MaskImage) {
-        let Some(sel) = self.selection.take() else {
-            return;
+        if let Some(mut sel) = self.selection.take() {
+            self.settle();
+            sel.delete_all(masks);
         };
-        self.settle();
-        let mut first = true;
-        for (layer, ls) in sel.logic.layers.into_iter() {
-            let restore = ls
-                .restore()
-                .and_then(|i| SortedRanges::try_from_span_iter(i).ok());
-            push_clear(masks, layer, ls.committed, first);
-            first = false;
-
-            if let Some(restore) = restore {
-                push_add(masks, layer, restore, false);
-            }
-        }
     }
 
     /// Cursor for the current hover/gesture state.
     fn hover_cursor(&self, ctx: &ToolContext, pointer_screen: Option<Pos2>) {
         let icon = match (&self.gesture, self.selection.as_ref(), pointer_screen) {
             (Some(Gesture::Move(_)), _, _) => CursorIcon::Grabbing,
-            (Some(Gesture::Resize(g)), Some(sel), _) => resize_cursor(&sel.logic.frame, g.anchor),
+            (Some(Gesture::Resize(g)), Some(sel), _) => resize_cursor(sel.frame(), g.anchor),
             (Some(Gesture::Rotate(_)), _, _) => CursorIcon::Grabbing,
             (Some(Gesture::Pan), _, _) => CursorIcon::AllScroll,
             (Some(Gesture::Rect(_)), _, _) => CursorIcon::Crosshair,
-            (None, Some(sel), Some(p)) => match hit_test(&*ctx.painter, p, &sel.logic.frame) {
+            (None, Some(sel), Some(p)) => match hit_test(&*ctx.painter, p, &sel.frame()) {
                 HoverPart::Outside => return,
                 HoverPart::Inside => CursorIcon::Move,
-                HoverPart::Anchor(a) => resize_cursor(&sel.logic.frame, a),
+                HoverPart::Anchor(a) => resize_cursor(&sel.frame(), a),
                 HoverPart::Rotate => CursorIcon::Grab,
             },
             _ => return,
@@ -515,10 +386,8 @@ impl Tool for DragTool {
                 if let (Some((base, base_total)), Some(sel)) =
                     (gesture.base_state(), self.selection.as_mut())
                 {
-                    sel.logic.frame = base;
-                    sel.logic.total = base_total;
                     // Restored frame and matrix invalidate the uploaded pixels.
-                    sel.preview.hide();
+                    sel.restore_gesture(base, base_total);
                 }
             } else {
                 self.drop_selection();
@@ -540,7 +409,7 @@ impl Tool for DragTool {
         let (w_nz, h_nz) = ctx.image.image.adjust.dimensions();
         let img_w = w_nz.get() as usize;
         let img_h = h_nz.get() as usize;
-        let img_rect = Rect::new(0, 0, w_nz, h_nz);
+        let img_roi = Roi::from_dimensions(w_nz, h_nz);
         let pointer_screen = ctx
             .response
             .interact_pointer_pos()
@@ -552,7 +421,6 @@ impl Tool for DragTool {
                 if ctx.response.drag_stopped() {
                     self.gesture = None;
                 }
-                PanTool::default().handle_interaction(ctx);
                 return;
             }
             Some(Gesture::Rect(rect_selection)) => {
@@ -570,7 +438,7 @@ impl Tool for DragTool {
                 // showing its highlight underneath (cheap repaint of the live
                 // texture; nothing to show after a replacing drag dropped it).
                 if let Some(s) = self.selection.as_mut() {
-                    s.render_selection(ctx.egui, &mut *ctx.painter, img_rect);
+                    s.render_selection(ctx.egui, &mut *ctx.painter, img_roi);
                 }
             }
             Some(Gesture::Move(_) | Gesture::Resize(_) | Gesture::Rotate(_)) => {
@@ -582,18 +450,15 @@ impl Tool for DragTool {
                     self.update_gesture_frame(Point2::new(p.x as f64, p.y as f64), shift);
                 }
                 if ctx.response.drag_stopped() || pointer.is_none() {
-                    self.commit(&mut ctx.image.masks, img_rect);
-                    self.settle();
+                    self.commit(&mut ctx.image.masks, img_roi);
                 } else if let Some(sel) = self.selection.as_mut() {
                     let moved = matches!(self.gesture, Some(Gesture::Move(_)));
-                    sel.render_transform(ctx.egui, &mut *ctx.painter, img_rect, moved);
+                    sel.render_transform(ctx.egui, &mut *ctx.painter, img_roi, moved);
                 }
                 self.hover_cursor(&ctx, pointer_screen);
             }
             None => {
                 if ctx.response.drag_started() && self.begin_gesture(&mut ctx, img_w, img_h) {
-                    // Whats that??
-                    PanTool::default().handle_interaction(ctx);
                     return;
                 } else if ctx.response.clicked()
                     && !ctx.response.drag_stopped()
@@ -602,7 +467,7 @@ impl Tool for DragTool {
                     // Shift-click adds the cluster to the selection instead of
                     // replacing it.
                     let additive = ctx.egui.input(|i| i.modifiers.shift);
-                    self.click_select(&mut ctx.image.masks, p, img_rect, additive);
+                    self.click_select(&mut ctx.image.masks, p, img_roi, additive);
                 } else {
                     self.hover_cursor(&ctx, pointer_screen);
                 }
@@ -612,7 +477,7 @@ impl Tool for DragTool {
         if self.gesture.is_none()
             && let Some(s) = self.selection.as_mut()
         {
-            s.render_selection(ctx.egui, &mut *ctx.painter, img_rect);
+            s.render_selection(ctx.egui, &mut *ctx.painter, img_roi);
         }
         if self.selection.is_some() {
             *ctx.postpone_new_images = true;
@@ -624,13 +489,32 @@ impl Tool for DragTool {
 mod tests {
     use std::num::NonZeroU32;
 
-    use crate::{
-        ImagePainter,
-        tool::drag::{active_selection::logic::union_ranges, frame::Anchor},
-    };
+    use imask::ImageDimension;
+    use nalgebra::{Matrix3, Vector2};
+
+    /// Span streams of the `masks` stack layers matched by `which`
+    /// (any `impl Into<AffectedLayer>`): the caller-side half of
+    /// [`DragTool::select_layers`] — filtering stays with the caller, tight
+    /// rebuilding inside the tool.
+    fn stack_spans(
+        masks: &MaskImage,
+        which: impl Into<AffectedLayer>,
+    ) -> impl Iterator<Item = (usize, impl Iterator<Item = Span<u32>> + ImageDimension + '_)> + '_
+    {
+        let which = which.into();
+        masks
+            .subgroups_stack()
+            .iter()
+            .filter(move |(i, _)| which.affects(*i))
+            .map(|(i, a)| (i, a.pixels.spans::<u32>()))
+    }
+
+    use super::active_selection::logic::union_ranges;
+    use super::frame::Anchor;
+    use super::transform::transform_layer;
+    use crate::ImagePainter;
 
     use super::*;
-    use nalgebra::Vector2;
 
     /// Test-only `Vec` adapter: `Vec` is not `ImageDimension`, so tight
     /// bounds are tracked natively via `SpanBoundsBuilder` first.
@@ -645,15 +529,16 @@ mod tests {
     }
 
     fn rect_ranges(x: u32, y: u32, w: NonZeroU32, h: NonZeroU32) -> SortedRanges<u32> {
-        SortedRanges::try_from_span_iter(Rect::new(x, y, w, h).into_spans()).unwrap()
+        SortedRanges::try_from_span_iter(Roi::new(x..x + w.get(), y..y + h.get()).into_spans())
+            .unwrap()
     }
 
     fn nz(n: u32) -> NonZeroU32 {
         NonZeroU32::new(n).unwrap()
     }
 
-    fn img_rect() -> Rect<u32> {
-        Rect::new(0, 0, nz(100), nz(100))
+    fn img_roi() -> Roi<u32> {
+        Roi::from_dimensions(nz(100), nz(100))
     }
 
     /// Pixel area of the first layer's committed selection content.
@@ -661,15 +546,7 @@ mod tests {
         tool.selection
             .as_ref()
             .expect("Selection is active")
-            .logic
-            .layers
-            .values()
-            .next()
-            .expect("Has at least one layer")
-            .committed
-            .spans::<u32>()
-            .map(|s| (s.x.end - s.x.start) as usize)
-            .sum()
+            .first_committed_area()
     }
 
     #[test]
@@ -686,19 +563,19 @@ mod tests {
         drag_move(&mut tool, Point2::new(15.0, 12.5), Point2::new(44.5, 32.5));
         let sel = tool.selection.as_ref().unwrap();
         assert_eq!(
-            sel.logic.total,
+            sel.total_for_test(),
             Matrix3::new_translation(&Vector2::new(30.0, 20.0))
         );
-        assert_eq!(sel.logic.frame.center, Point2::new(45.0, 32.5));
-        tool.commit(&mut masks, img_rect());
+        assert_eq!(sel.frame().center, Point2::new(45.0, 32.5));
+        tool.commit(&mut masks, img_roi());
         // Committed content is pixel-exact: original 50px, no fringe.
         assert_eq!(committed_area(&tool), 50);
         assert!(outsider_block_ok(&masks));
         // Second fractional move: still exact, outsiders still intact.
         drag_move(&mut tool, Point2::new(44.5, 32.5), Point2::new(20.4, 22.6));
-        tool.commit(&mut masks, img_rect());
+        tool.commit(&mut masks, img_roi());
         assert_eq!(
-            tool.selection.as_ref().unwrap().logic.total,
+            tool.selection.as_ref().unwrap().total_for_test(),
             Matrix3::new_translation(&Vector2::new(-24.0, -10.0))
                 * Matrix3::new_translation(&Vector2::new(30.0, 20.0))
         );
@@ -719,7 +596,7 @@ mod tests {
         let mut tool = DragTool::default();
         click(&mut tool, &mut masks, 12.0, 12.0, false);
         drag_move(&mut tool, Point2::new(15.0, 12.5), Point2::new(45.0, 32.5));
-        tool.commit(&mut masks, img_rect());
+        tool.commit(&mut masks, img_roi());
         tool.delete_selection(&mut masks);
         assert!(tool.selection.is_none());
         // Only the outsiders remain: selection content (original spot and
@@ -737,26 +614,12 @@ mod tests {
     }
 
     fn select_layer(tool: &mut DragTool, masks: &MaskImage, original: SortedRanges<u32>) {
-        tool.selection = Some(ActiveSelection::from_logic(ActiveSelectionLogic {
-            total: Matrix3::identity(),
-            frame: Frame::around(original.bounds()),
-            layers: masks
-                .subgroups_stack()
-                .get(0)
-                .map(|a| {
-                    (
-                        0,
-                        LayerSelection {
-                            original,
-                            committed: a.pixels.clone(), // Test scaffolding: no outsiders to restore.
-                            background: None,
-                        },
-                    )
-                })
-                .into_iter()
-                .collect(),
-            tip: masks.last_history_action(),
-        }));
+        tool.selection = Some(ActiveSelection::fresh_single(
+            0,
+            original,
+            None,
+            masks.last_history_action(),
+        ));
     }
 
     /// Simulate a Move gesture from `from` to `to` through the real update
@@ -764,7 +627,7 @@ mod tests {
     fn drag_move(tool: &mut DragTool, from: Point2<f64>, to: Point2<f64>) {
         let (frame, total) = {
             let sel = tool.selection.as_ref().unwrap();
-            (sel.logic.frame, sel.logic.total)
+            sel.snapshot_transform()
         };
         tool.gesture = Some(Gesture::Move(GestureMove {
             start: from,
@@ -785,12 +648,12 @@ mod tests {
         let mut tool = DragTool::default();
         select_layer(&mut tool, &masks, original);
         drag_move(&mut tool, Point2::new(12.5, 12.5), Point2::new(17.5, 12.5));
-        tool.commit(&mut masks, img_rect());
+        tool.commit(&mut masks, img_roi());
         assert_eq!(
             layer_pixels(&masks),
             Some(rect_ranges(15, 10, nz(5), nz(5)))
         );
-        let frame = tool.selection.as_ref().unwrap().logic.frame;
+        let frame = tool.selection.as_ref().unwrap().frame();
         assert_eq!(frame.center, Point2::new(17.5, 12.5));
         assert_eq!(frame.half, Vector2::new(2.5, 2.5));
     }
@@ -804,7 +667,7 @@ mod tests {
         // no empty box is shown. The clears stay one undo step.
         drag_move(&mut tool, Point2::new(12.5, 12.5), Point2::new(-37.5, 12.5));
         let tip_before = masks.last_history_action();
-        tool.commit(&mut masks, img_rect());
+        tool.commit(&mut masks, img_roi());
         assert_eq!(layer_pixels(&masks), None);
         assert!(tool.selection.is_none());
         assert_ne!(masks.last_history_action(), tip_before);
@@ -823,25 +686,17 @@ mod tests {
         tool.selection
             .as_mut()
             .unwrap()
-            .render_transform(&ctx, &mut painter, img_rect(), false);
-        assert!(tool.selection.as_ref().unwrap().preview.is_visible());
+            .render_transform(&ctx, &mut painter, img_roi(), false);
+        assert!(tool.selection.as_ref().unwrap().preview_visible());
         drag_move(&mut tool, Point2::new(12.0, 12.0), Point2::new(17.0, 12.0));
-        tool.commit(&mut masks, img_rect());
+        tool.commit(&mut masks, img_roi());
         // Pixels landed, outsiders intact, and the preview survived the drop.
         assert_eq!(
-            tool.selection
-                .as_ref()
-                .unwrap()
-                .logic
-                .layers
-                .values()
-                .next()
-                .unwrap()
-                .committed,
-            rect_ranges(15, 10, nz(10), nz(5))
+            tool.selection.as_ref().unwrap().first_committed_for_test(),
+            Some(rect_ranges(15, 10, nz(10), nz(5)))
         );
         assert!(outsider_block_ok(&masks));
-        assert!(tool.selection.as_ref().unwrap().preview.is_visible());
+        assert!(tool.selection.as_ref().unwrap().preview_visible());
     }
 
     #[test]
@@ -852,7 +707,7 @@ mod tests {
         let mut tool = DragTool::default();
         select_layer(&mut tool, &masks, original);
         let tip_before = masks.last_history_action();
-        tool.commit(&mut masks, img_rect());
+        tool.commit(&mut masks, img_roi());
         assert_eq!(masks.last_history_action(), tip_before);
         let mut tool = DragTool::default();
         tool.delete_selection(&mut masks);
@@ -879,7 +734,7 @@ mod tests {
     }
 
     fn click(tool: &mut DragTool, masks: &mut MaskImage, x: f32, y: f32, additive: bool) {
-        tool.click_select(masks, Pos2::new(x, y), img_rect(), additive);
+        tool.click_select(masks, Pos2::new(x, y), img_roi(), additive);
     }
 
     #[test]
@@ -887,14 +742,14 @@ mod tests {
         let mut masks = mask_with_two_clusters();
         let mut tool = DragTool::default();
         click(&mut tool, &mut masks, 0.0, 0.0, false);
-        assert_eq!(tool.selection.as_ref().unwrap().logic.layers.len(), 1);
+        assert_eq!(tool.selection.as_ref().unwrap().layer_count_for_test(), 1);
         click(&mut tool, &mut masks, 6.0, 3.0, true);
         let sel = tool.selection.as_ref().unwrap();
         // Same layer unions into a single entry (like rect-select).
-        assert_eq!(sel.logic.layers.len(), 1);
-        assert_eq!(sel.logic.layers.get(&0).unwrap().original.len(), 2);
+        assert_eq!(sel.layer_count_for_test(), 1);
+        assert_eq!(sel.original_of_for_test(0).unwrap().len(), 2);
         // Frame expanded to contain both clusters.
-        assert!(sel.logic.frame.half.x >= 3.5);
+        assert!(sel.frame().half.x >= 3.5);
     }
 
     #[test]
@@ -909,7 +764,7 @@ mod tests {
         click(&mut tool, &mut masks, 1.0, 0.0, true);
         click(&mut tool, &mut masks, 50.0, 50.0, true);
         let sel = tool.selection.as_ref().unwrap();
-        assert_eq!(sel.logic.layers.len(), 1);
+        assert_eq!(sel.layer_count_for_test(), 1);
         assert_eq!(masks.last_history_action(), tip_before);
     }
 
@@ -923,8 +778,8 @@ mod tests {
         click(&mut tool, &mut masks, 0.0, 0.0, false);
         click(&mut tool, &mut masks, 51.0, 50.0, true);
         let sel = tool.selection.as_ref().unwrap();
-        assert_eq!(sel.logic.layers.len(), 2);
-        let mut layers: Vec<usize> = sel.logic.layers.keys().copied().collect();
+        assert_eq!(sel.layer_count_for_test(), 2);
+        let mut layers: Vec<usize> = sel.layer_ids_for_test();
         layers.sort_unstable();
         assert_eq!(layers, vec![0, 1]);
     }
@@ -943,7 +798,7 @@ mod tests {
         assert!(tool.selection.is_none());
         click(&mut tool, &mut masks, 0.0, 0.0, false);
         click(&mut tool, &mut masks, 51.0, 0.0, true);
-        assert_eq!(tool.selection.as_ref().unwrap().logic.layers.len(), 1);
+        assert_eq!(tool.selection.as_ref().unwrap().layer_count_for_test(), 1);
     }
 
     #[test]
@@ -953,28 +808,27 @@ mod tests {
         click(&mut tool, &mut masks, 0.0, 0.0, false);
         // Transform + commit: entry original stays pristine, committed moves.
         drag_move(&mut tool, Point2::new(1.0, 0.0), Point2::new(6.0, 0.0));
-        tool.commit(&mut masks, img_rect());
+        tool.commit(&mut masks, img_roi());
         // Shift-add bakes committed into original and resets the matrix,
         // without touching history.
         let tip_before = masks.last_history_action();
         click(&mut tool, &mut masks, 6.0, 3.0, true);
         let sel = tool.selection.as_ref().unwrap();
         assert_eq!(masks.last_history_action(), tip_before);
-        assert_eq!(sel.logic.total, Matrix3::identity());
-        assert_eq!(sel.logic.layers.len(), 1);
+        assert_eq!(sel.total_for_test(), Matrix3::identity());
+        assert_eq!(sel.layer_count_for_test(), 1);
         // Rebaked original is the union of the placed pixels (moved cluster A)
         // and the newly added cluster B.
-        let entry0 = sel.logic.layers.get(&0).unwrap();
         let moved_a = transform_layer(
             &ranges_from_spans(vec![Span::new(0..2, 0u32)]).unwrap(),
             &Matrix3::new_translation(&Vector2::new(5.0, 0.0)),
-            Rect::new(0, 0, nz(100), nz(100)),
+            img_roi(),
         )
         .unwrap();
         let cluster_b = ranges_from_spans(vec![Span::new(5..7, 3u32)]).unwrap();
         let expected = union_ranges(&moved_a, &cluster_b).unwrap();
-        assert_eq!(entry0.original, expected);
-        assert_eq!(entry0.committed, expected);
+        assert_eq!(sel.original_of_for_test(0), Some(expected.clone()));
+        assert_eq!(sel.committed_of_for_test(0), Some(expected));
     }
 
     #[test]
@@ -985,24 +839,18 @@ mod tests {
         let a = RectSelectionResult::new(0, 0, 3, 1, w, w).unwrap();
         tool.select_rect(&masks, &a, false);
         let sel = tool.selection.as_ref().unwrap();
-        assert_eq!(sel.logic.layers.len(), 1);
+        assert_eq!(sel.layer_count_for_test(), 1);
         // Frame hugs the contained cluster (0..2, 0), not the marquee.
-        assert_eq!(sel.logic.frame.center, Point2::new(1.0, 0.5));
-        assert_eq!(sel.logic.frame.half, Vector2::new(1.0, 0.5));
+        assert_eq!(sel.frame().center, Point2::new(1.0, 0.5));
+        assert_eq!(sel.frame().half, Vector2::new(1.0, 0.5));
         // Shift-rect over the second cluster unions into the same entry.
         let b = RectSelectionResult::new(4, 2, 8, 4, w, w).unwrap();
         tool.select_rect(&masks, &b, true);
         let sel = tool.selection.as_ref().unwrap();
-        assert_eq!(sel.logic.layers.len(), 1);
-        let bounds = sel.logic.layers.values().next().unwrap().original.bounds();
-        assert_eq!((bounds.x, bounds.y), (0, 0));
-        assert_eq!(
-            (
-                bounds.x + bounds.width.get(),
-                bounds.y + bounds.height.get()
-            ),
-            (7, 4)
-        );
+        assert_eq!(sel.layer_count_for_test(), 1);
+        let bounds = sel.first_original_bounds_for_test();
+        assert_eq!((bounds.x.start, bounds.y.start), (0, 0));
+        assert_eq!((bounds.x.end, bounds.y.end), (7, 4));
     }
 
     #[test]
@@ -1019,17 +867,12 @@ mod tests {
             .selection
             .as_ref()
             .unwrap()
-            .logic
-            .layers
-            .values()
-            .next()
-            .unwrap()
-            .original
-            .clone();
+            .first_original_for_test()
+            .unwrap();
         assert_eq!(union_original.len(), 2);
         let (frame, _) = {
             let sel = tool.selection.as_ref().unwrap();
-            (sel.logic.frame, sel.logic.total)
+            sel.snapshot_transform()
         };
         let east = frame.point(Vector2::new(frame.half.x, 0.0));
         drag_resize(
@@ -1039,14 +882,14 @@ mod tests {
             Point2::new(east.x + frame.half.x, east.y),
             false,
         );
-        let total = tool.selection.as_ref().unwrap().logic.total;
-        let expected = transform_layer(&union_original, &total, img_rect()).unwrap();
-        tool.commit(&mut masks, img_rect());
+        let total = tool.selection.as_ref().unwrap().total_for_test();
+        let expected = transform_layer(&union_original, &total, img_roi()).unwrap();
+        tool.commit(&mut masks, img_roi());
         assert_eq!(layer_pixels(&masks), Some(expected));
         // Both areas survived the resize (no subtraction of the old area).
         let pixels = layer_pixels(&masks).unwrap();
         assert!(pixels.spans::<u32>().any(|s| s.y == 0));
-        assert_eq!(tool.selection.as_ref().unwrap().logic.layers.len(), 1);
+        assert_eq!(tool.selection.as_ref().unwrap().layer_count_for_test(), 1);
     }
 
     /// Simulate a Resize gesture from `from` to `to` through the real update
@@ -1062,7 +905,7 @@ mod tests {
     ) {
         let (frame, total) = {
             let sel = tool.selection.as_ref().unwrap();
-            (sel.logic.frame, sel.logic.total)
+            sel.snapshot_transform()
         };
         tool.gesture = Some(Gesture::Resize(GestureResize {
             anchor,
@@ -1087,35 +930,35 @@ mod tests {
     fn select_layers_selects_whole_matched_layers() {
         let masks = mask_with_three_layers();
         let mut tool = DragTool::default();
-        tool.select_layers(&masks, 0..2);
+        tool.select_layers(&masks, stack_spans(&masks, 0..2));
         let sel = tool.selection.as_ref().unwrap();
-        assert_eq!(sel.logic.layers.len(), 2);
+        assert_eq!(sel.layer_count_for_test(), 2);
         assert_eq!(
-            sel.logic.layers.get(&0).unwrap().original,
-            rect_ranges(0, 0, nz(2), nz(2))
+            sel.original_of_for_test(0),
+            Some(rect_ranges(0, 0, nz(2), nz(2)))
         );
         assert_eq!(
-            sel.logic.layers.get(&1).unwrap().original,
-            rect_ranges(50, 0, nz(2), nz(2))
+            sel.original_of_for_test(1),
+            Some(rect_ranges(50, 0, nz(2), nz(2)))
         );
-        assert_eq!(sel.logic.total, Matrix3::identity());
+        assert_eq!(sel.total_for_test(), Matrix3::identity());
         // Frame tightly covers both layers, nothing else.
-        assert_eq!(sel.logic.frame.center, Point2::new(26.0, 1.0));
-        assert_eq!(sel.logic.frame.half, Vector2::new(26.0, 1.0));
+        assert_eq!(sel.frame().center, Point2::new(26.0, 1.0));
+        assert_eq!(sel.frame().half, Vector2::new(26.0, 1.0));
         // Staleness tip armed against the current history.
-        assert_eq!(sel.logic.tip, masks.last_history_action());
+        assert_eq!(sel.tip_for_test(), masks.last_history_action());
     }
 
     #[test]
     fn select_layers_accepts_layer_shorthand() {
         let masks = mask_with_three_layers();
         let mut tool = DragTool::default();
-        tool.select_layers(&masks, 2);
+        tool.select_layers(&masks, stack_spans(&masks, 2));
         let sel = tool.selection.as_ref().unwrap();
-        assert_eq!(sel.logic.layers.len(), 1);
+        assert_eq!(sel.layer_count_for_test(), 1);
         assert_eq!(
-            sel.logic.layers.get(&2).unwrap().original,
-            rect_ranges(0, 50, nz(2), nz(2))
+            sel.original_of_for_test(2),
+            Some(rect_ranges(0, 50, nz(2), nz(2)))
         );
     }
 
@@ -1123,9 +966,9 @@ mod tests {
     fn select_layers_without_match_drops_selection() {
         let masks = mask_with_three_layers();
         let mut tool = DragTool::default();
-        tool.select_layers(&masks, ..);
+        tool.select_layers(&masks, stack_spans(&masks, ..));
         assert!(tool.selection.is_some());
-        tool.select_layers(&masks, 5..8);
+        tool.select_layers(&masks, stack_spans(&masks, 5..8));
         assert!(tool.selection.is_none());
     }
 
@@ -1133,21 +976,21 @@ mod tests {
     fn select_layers_replaces_existing_selection() {
         let masks = mask_with_three_layers();
         let mut tool = DragTool::default();
-        tool.select_layers(&masks, ..);
-        assert_eq!(tool.selection.as_ref().unwrap().logic.layers.len(), 3);
-        tool.select_layers(&masks, 1..2);
+        tool.select_layers(&masks, stack_spans(&masks, ..));
+        assert_eq!(tool.selection.as_ref().unwrap().layer_count_for_test(), 3);
+        tool.select_layers(&masks, stack_spans(&masks, 1..2));
         let sel = tool.selection.as_ref().unwrap();
-        assert_eq!(sel.logic.layers.len(), 1);
-        assert!(sel.logic.layers.get(&1).is_some());
+        assert_eq!(sel.layer_count_for_test(), 1);
+        assert!(sel.has_layer_for_test(1));
     }
 
     #[test]
     fn select_layers_then_gesture_moves_all_layers() {
         let mut masks = mask_with_three_layers();
         let mut tool = DragTool::default();
-        tool.select_layers(&masks, 0..3);
+        tool.select_layers(&masks, stack_spans(&masks, 0..3));
         drag_move(&mut tool, Point2::new(1.0, 1.0), Point2::new(4.0, 5.0));
-        tool.commit(&mut masks, img_rect());
+        tool.commit(&mut masks, img_roi());
         assert_eq!(layer_pixels(&masks), Some(rect_ranges(3, 4, nz(2), nz(2))));
         let second = masks.subgroups_stack().get(1).map(|a| a.pixels.clone());
         assert_eq!(second, Some(rect_ranges(53, 4, nz(2), nz(2))));
@@ -1192,23 +1035,23 @@ mod tests {
         // Small overlapping move.
         let (mut masks, mut tool) = fresh_block_selection();
         drag_move(&mut tool, Point2::new(12.0, 12.0), Point2::new(14.0, 12.0));
-        tool.commit(&mut masks, img_rect());
+        tool.commit(&mut masks, img_roi());
         assert!(outsider_block_ok(&masks));
 
         // Two consecutive moves.
         let (mut masks, mut tool) = fresh_block_selection();
         drag_move(&mut tool, Point2::new(12.0, 12.0), Point2::new(17.0, 12.0));
-        tool.commit(&mut masks, img_rect());
+        tool.commit(&mut masks, img_roi());
         drag_move(&mut tool, Point2::new(17.0, 12.0), Point2::new(22.0, 12.0));
-        tool.commit(&mut masks, img_rect());
+        tool.commit(&mut masks, img_roi());
         assert!(outsider_block_ok(&masks));
 
         // Move and back.
         let (mut masks, mut tool) = fresh_block_selection();
         drag_move(&mut tool, Point2::new(12.0, 12.0), Point2::new(17.0, 12.0));
-        tool.commit(&mut masks, img_rect());
+        tool.commit(&mut masks, img_roi());
         drag_move(&mut tool, Point2::new(17.0, 12.0), Point2::new(12.0, 12.0));
-        tool.commit(&mut masks, img_rect());
+        tool.commit(&mut masks, img_roi());
         assert!(outsider_block_ok(&masks));
 
         // Shift-add second cluster, then move both: nothing outside the
@@ -1217,11 +1060,11 @@ mod tests {
         let mut tool = DragTool::default();
         click(&mut tool, &mut masks, 0.0, 0.0, false);
         drag_move(&mut tool, Point2::new(1.0, 0.0), Point2::new(6.0, 0.0));
-        tool.commit(&mut masks, img_rect());
+        tool.commit(&mut masks, img_roi());
         let before = layer_pixels(&masks).unwrap();
         click(&mut tool, &mut masks, 6.0, 3.0, true);
         drag_move(&mut tool, Point2::new(6.0, 3.0), Point2::new(16.0, 13.0));
-        tool.commit(&mut masks, img_rect());
+        tool.commit(&mut masks, img_roi());
         let after = layer_pixels(&masks).unwrap();
         assert_eq!(after.spans::<u32>().count(), before.spans::<u32>().count());
 
@@ -1232,22 +1075,22 @@ mod tests {
         let r = RectSelectionResult::new(8, 8, 22, 16, w, w).unwrap();
         tool.select_rect(&masks, &r, false);
         drag_move(&mut tool, Point2::new(15.0, 12.5), Point2::new(19.7, 14.8));
-        tool.commit(&mut masks, img_rect());
+        tool.commit(&mut masks, img_roi());
         assert!(outsider_block_ok(&masks));
         drag_move(&mut tool, Point2::new(19.7, 14.8), Point2::new(16.2, 19.3));
-        tool.commit(&mut masks, img_rect());
+        tool.commit(&mut masks, img_roi());
         assert!(outsider_block_ok(&masks));
 
         // 2D partial overlap: 10x5 block moved to straddle the outsider block.
         let (mut masks, mut tool) = fresh_block_selection();
         drag_move(&mut tool, Point2::new(15.0, 12.5), Point2::new(43.0, 31.5));
-        tool.commit(&mut masks, img_rect());
+        tool.commit(&mut masks, img_roi());
         assert!(outsider_block_ok(&masks));
 
         // 2D full cover: moved block lands exactly on the outsider block.
         let (mut masks, mut tool) = fresh_block_selection();
         drag_move(&mut tool, Point2::new(15.0, 12.5), Point2::new(45.0, 32.5));
-        tool.commit(&mut masks, img_rect());
+        tool.commit(&mut masks, img_roi());
         assert!(outsider_block_ok(&masks));
     }
 }

@@ -1,4 +1,4 @@
-use imask::Rect;
+use imask::Roi;
 use nalgebra::{Matrix3, Point2, Rotation2, Translation2, Vector2};
 
 /// Rotation snaps to multiples of this (absolute angle, not delta), unless
@@ -72,11 +72,11 @@ pub(crate) struct Frame {
 impl Frame {
     /// Unrotated frame tightly around integer content `bounds`. Snapshots
     /// always carry tight bounds, so this is O(1) with no span iteration.
-    pub(crate) fn around(bounds: Rect<u32>) -> Self {
-        let x0 = f64::from(bounds.x);
-        let y0 = f64::from(bounds.y);
-        let x1 = f64::from(bounds.x + bounds.width.get());
-        let y1 = f64::from(bounds.y + bounds.height.get());
+    pub(crate) fn around(bounds: Roi<u32>) -> Self {
+        let x0 = f64::from(bounds.x.start);
+        let y0 = f64::from(bounds.y.start);
+        let x1 = f64::from(bounds.x.end);
+        let y1 = f64::from(bounds.y.end);
         Self {
             center: Point2::new((x0 + x1) / 2.0, (y0 + y1) / 2.0),
             half: Vector2::new((x1 - x0) / 2.0, (y1 - y0) / 2.0),
@@ -102,13 +102,10 @@ impl Frame {
 
     /// Grow the frame (keeping angle) to cover integer content `bounds`,
     /// using their tight extent.
-    pub(crate) fn expand_to_cover(&mut self, bounds: Rect<u32>) {
+    pub(crate) fn expand_to_cover(&mut self, bounds: Roi<u32>) {
         self.expand_to_include(
-            Point2::new(f64::from(bounds.x), f64::from(bounds.y)),
-            Point2::new(
-                f64::from(bounds.x + bounds.width.get()),
-                f64::from(bounds.y + bounds.height.get()),
-            ),
+            Point2::new(f64::from(bounds.x.start), f64::from(bounds.y.start)),
+            Point2::new(f64::from(bounds.x.end), f64::from(bounds.y.end)),
         );
     }
 
@@ -180,14 +177,13 @@ pub(crate) fn snap_angle(angle: f64) -> f64 {
 }
 
 /// Union of content bounds. `None` when empty.
-pub(crate) fn union_bounds(bounds: impl IntoIterator<Item = Rect<u32>>) -> Option<Rect<u32>> {
+pub(crate) fn union_bounds(bounds: impl IntoIterator<Item = Roi<u32>>) -> Option<Roi<u32>> {
     bounds.into_iter().reduce(|a, b| a.union(&b))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::num::NonZeroU32;
 
     #[test]
     fn frame_point_roundtrip() {
@@ -244,18 +240,8 @@ mod tests {
     fn expand_to_cover_wraps_content_bounds() {
         // Frame hugs the contained content, not the queried box: the frame
         // shrinks to the union of its extent and the content bounds.
-        let mut frame = Frame::around(Rect::new(
-            5,
-            5,
-            NonZeroU32::new(4).unwrap(),
-            NonZeroU32::new(2).unwrap(),
-        ));
-        frame.expand_to_cover(Rect::new(
-            0,
-            0,
-            NonZeroU32::new(2).unwrap(),
-            NonZeroU32::new(2).unwrap(),
-        ));
+        let mut frame = Frame::around(Roi::new(5..9, 5..7));
+        frame.expand_to_cover(Roi::new(0..2, 0..2));
         // Old extent (5..9)x(5..7) plus content (0..2)x(0..2) → (0..9)x(0..7).
         assert_eq!(frame.center, Point2::new(4.5, 3.5));
         assert_eq!(frame.half, Vector2::new(4.5, 3.5));
