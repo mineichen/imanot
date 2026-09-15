@@ -140,7 +140,7 @@ impl Storage for FileStorage {
                 let (bounds, color) = if file_version == 1 {
                     let color = imanot::random_color_from_seed(all.len() as u16);
                     (
-                        Roi::new_unchecked(0u32..image_width.get(), 0..image_height.get()),
+                        Roi::new_unchecked(0..image_width.get(), 0..image_height.get()),
                         color,
                     )
                 } else {

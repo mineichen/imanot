@@ -794,7 +794,7 @@ mod tests {
         let mut mask_image = mask_10(Vec::new());
         mask_image
             .on_layer(AffectedLayer::Range(0, Some(2)))
-            .add(SortedRanges::from(Span::new(1u16..3, 0)));
+            .add(SortedRanges::from(Span::new(1..3, 0)));
         assert_eq!(
             mask_image.subgroup_spans_flat().collect::<Vec<_>>(),
             vec![(0, Span::new(1..3, 0)), (1, Span::new(1..3, 0)),]
@@ -804,11 +804,11 @@ mod tests {
     #[test]
     fn add_to_open_ended_range_of_layers() {
         let mut mask_image = mask_10(Vec::new());
-        mask_image.add(SortedRanges::from(Span::new(1u16..3, 0)));
-        mask_image.add(SortedRanges::from(Span::new(4u16..6, 0)));
+        mask_image.add(SortedRanges::from(Span::new(1..3, 0)));
+        mask_image.add(SortedRanges::from(Span::new(4..6, 0)));
         mask_image
             .on_layer(AffectedLayer::Range(1, None))
-            .add(SortedRanges::from(Span::new(2u16..5, 0)));
+            .add(SortedRanges::from(Span::new(2..5, 0)));
         assert_eq!(
             mask_image.subgroup_spans_flat().collect::<Vec<_>>(),
             vec![(0, Span::new(1..3, 0)), (1, Span::new(2..6, 0)),]
@@ -818,11 +818,11 @@ mod tests {
     #[test]
     fn clear_range_of_layers() {
         let mut mask_image = mask_10(Vec::new());
-        mask_image.add(SortedRanges::from(Span::new(1u16..9, 0)));
-        mask_image.add(SortedRanges::from(Span::new(2u16..8, 0)));
+        mask_image.add(SortedRanges::from(Span::new(1..9, 0)));
+        mask_image.add(SortedRanges::from(Span::new(2..8, 0)));
         mask_image
             .on_layer(AffectedLayer::Range(0, Some(2)))
-            .clear(Rect::new(0u32, 0, NON_ZERO_4, NON_ZERO_1).into_spans());
+            .clear(Rect::new(0, 0, NON_ZERO_4, NON_ZERO_1).into_spans());
         assert_eq!(
             mask_image.subgroup_spans_flat().collect::<Vec<_>>(),
             vec![(0, Span::new(4..9, 0)), (1, Span::new(4..8, 0)),]
@@ -832,9 +832,9 @@ mod tests {
     #[test]
     fn reset_range_of_layers() {
         let mut mask_image = mask_10(Vec::new());
-        mask_image.add(SortedRanges::from(Span::new(1u16..9, 0)));
-        mask_image.add(SortedRanges::from(Span::new(2u16..8, 0)));
-        mask_image.add(SortedRanges::from(Span::new(3u16..7, 0)));
+        mask_image.add(SortedRanges::from(Span::new(1..9, 0)));
+        mask_image.add(SortedRanges::from(Span::new(2..8, 0)));
+        mask_image.add(SortedRanges::from(Span::new(3..7, 0)));
         mask_image
             .on_layer(AffectedLayer::Range(0, Some(2)))
             .reset();
@@ -890,8 +890,8 @@ mod tests {
     #[test]
     fn add_area_with_overlap() {
         let mut mask_image = mask_10(Vec::new());
-        mask_image.add(SortedRanges::from(Span::new(1u16..5, 0)));
-        mask_image.add(SortedRanges::from(Span::new(2u16..4, 0)));
+        mask_image.add(SortedRanges::from(Span::new(1..5, 0)));
+        mask_image.add(SortedRanges::from(Span::new(2..4, 0)));
         assert_eq!(
             mask_image.subgroup_spans_flat().collect::<Vec<_>>(),
             vec![(0, Span::new(1..5, 0)), (1, Span::new(2..4, 0)),]
@@ -902,9 +902,9 @@ mod tests {
     fn add_area_non_overlapping_parts_remove_completely() {
         let mut mask_image = mask_10(Vec::new());
 
-        let ranges = SortedRanges::from(Span::new(1u16..5, 0));
+        let ranges = SortedRanges::from(Span::new(1..5, 0));
         mask_image.keep_overlapping(false).add(ranges);
-        let ranges = SortedRanges::from(Span::new(2u16..4, 0));
+        let ranges = SortedRanges::from(Span::new(2..4, 0));
         mask_image.keep_overlapping(false).add(ranges);
 
         assert_eq!(
@@ -916,9 +916,9 @@ mod tests {
     fn add_area_non_overlapping_parts_remove_partially() {
         let mut mask_image = mask_10(Vec::new());
 
-        let ranges = SortedRanges::from(Span::new(1u16..5, 0));
+        let ranges = SortedRanges::from(Span::new(1..5, 0));
         mask_image.keep_overlapping(false).add(ranges);
-        let ranges = SortedRanges::from(Span::new(2u16..6, 0));
+        let ranges = SortedRanges::from(Span::new(2..6, 0));
         mask_image.keep_overlapping(false).add(ranges);
 
         assert_eq!(
@@ -931,9 +931,9 @@ mod tests {
     fn clear_should_remove_multiple_overlapping_areas_start() {
         let mut mask_image = mask_10(Vec::new());
 
-        let ranges = SortedRanges::from(Span::new(1u16..9, 0));
+        let ranges = SortedRanges::from(Span::new(1..9, 0));
         mask_image.add(ranges);
-        let ranges = SortedRanges::from(Span::new(2u16..8, 0));
+        let ranges = SortedRanges::from(Span::new(2..8, 0));
         mask_image.add(ranges);
 
         mask_image.clear(Rect::new(0u32, 0, NON_ZERO_4, NON_ZERO_1).into_spans());
@@ -948,12 +948,12 @@ mod tests {
     fn clear_should_remove_multiple_overlapping_areas_end() {
         let mut mask_image = mask_10(Vec::new());
 
-        let ranges = SortedRanges::from(Span::new(2u16..8, 0));
+        let ranges = SortedRanges::from(Span::new(2..8, 0));
         mask_image.add(ranges);
-        let ranges = SortedRanges::from(Span::new(1u16..9, 0));
+        let ranges = SortedRanges::from(Span::new(1..9, 0));
         mask_image.add(ranges);
 
-        mask_image.clear(Rect::new(5u32, 0, NON_ZERO_5, NON_ZERO_1).into_spans());
+        mask_image.clear(Rect::new(5, 0, NON_ZERO_5, NON_ZERO_1).into_spans());
 
         assert_eq!(
             mask_image.subgroup_spans_flat().collect::<Vec<_>>(),
@@ -965,9 +965,9 @@ mod tests {
     fn clear_should_remove_multiple_overlapping_areas_within() {
         let mut mask_image = mask_10(Vec::new());
 
-        let ranges = SortedRanges::from(Span::new(1u16..9, 0));
+        let ranges = SortedRanges::from(Span::new(1..9, 0));
         mask_image.add(ranges);
-        let ranges = SortedRanges::from(Span::new(2u16..8, 0));
+        let ranges = SortedRanges::from(Span::new(2..8, 0));
         mask_image.add(ranges);
 
         mask_image.clear(Rect::new(4u32, 0, NON_ZERO_2, NON_ZERO_1).into_spans());
@@ -994,7 +994,7 @@ mod tests {
                 )
                 .unwrap(),
                 PixelArea {
-                    pixels: SortedRanges::from(Span::new(2u16..7, 3)),
+                    pixels: SortedRanges::from(Span::new(2..7, 3)),
                     color: [0, 0, 0, 255],
                 },
             ],
@@ -1028,7 +1028,8 @@ mod tests {
         .unwrap();
         mask_image.add(layer0);
 
-        let spans1 = [Span::new(0u32..5, 3), Span::new(0u32..3, 5)].with_bounds(WIDTH_10, WIDTH_10);
+        let spans1 =
+            [Span::new(0u32..5, 3), Span::new(0..3, 5)].with_bounds(WIDTH_10, WIDTH_10);
         let layer1 = SortedRanges::try_from_span_iter(spans1).unwrap();
         mask_image.add(layer1);
 
@@ -1080,21 +1081,21 @@ mod tests {
         let mut history = History::default();
         history.push(HistoryAction {
             kind: HistoryActionKind::Add(HistoryActionAdd {
-                pixel_area: SortedRanges::from(Span::new(0u16..2, 0)),
+                pixel_area: SortedRanges::from(Span::new(0..2, 0)),
             }),
             layer: AffectedLayer::Unspecified,
             tracked: true,
         });
         history.push(HistoryAction {
             kind: HistoryActionKind::Add(HistoryActionAdd {
-                pixel_area: SortedRanges::from(Span::new(1u16..5, 0)),
+                pixel_area: SortedRanges::from(Span::new(1..5, 0)),
             }),
             layer: AffectedLayer::Unspecified,
             tracked: true,
         });
         let mut x = MaskImage::new([10, 10], vec![], history);
         x.keep_overlapping(false)
-            .add(SortedRanges::from(Span::new(2u16..6, 0)));
+            .add(SortedRanges::from(Span::new(2..6, 0)));
         let group_sequence: Vec<_> = x
             .subgroups_ordered_spans()
             .map(|(group_id, _)| group_id)
