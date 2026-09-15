@@ -74,7 +74,7 @@ impl ActiveSelectionLogic {
         Self {
             total: Matrix3::identity(),
             frame: Frame::around(ranges.bounds()),
-            layers: std::iter::once((idx, LayerSelection::fresh(ranges, background))).collect(),
+            layers: BTreeMap::from([(idx, LayerSelection::fresh(ranges, background))]),
             tip,
         }
     }
