@@ -64,6 +64,13 @@ pub(crate) struct ActiveSelectionLogic {
 }
 
 impl ActiveSelectionLogic {
+    pub(crate) fn rebase(&mut self, tip: Option<HistoryAction>) {
+        self.layers.values_mut().for_each(|l| {
+            l.original = l.committed.clone();
+        });
+        self.total = Matrix3::identity();
+        self.tip = tip;
+    }
     /// Fresh (replacing) single-layer selection. `original == committed`.
     pub(crate) fn fresh_single(
         idx: usize,

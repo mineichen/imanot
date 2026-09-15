@@ -88,7 +88,7 @@ impl DragTool {
     fn rebase(&mut self, tip: Option<HistoryAction>) {
         if let Some(sel) = self.selection.as_mut() {
             sel.rebase(tip);
-            if sel.layers.is_empty() {
+            if sel.logic.layers.is_empty() {
                 self.drop_selection();
             }
         }
@@ -98,7 +98,8 @@ impl DragTool {
     /// selection pixels?
     fn covers_on_layer(&self, layer: usize, x: u32, y: u32) -> bool {
         self.selection.as_ref().is_some_and(|sel| {
-            sel.layers
+            sel.logic
+                .layers
                 .get(&layer)
                 .is_some_and(|l| l.committed.contains(x, y))
         })
@@ -110,7 +111,7 @@ impl DragTool {
         if self
             .selection
             .as_ref()
-            .is_some_and(|sel| sel.tip != masks.last_history_action())
+            .is_some_and(|sel| sel.logic.tip != masks.last_history_action())
         {
             self.drop_selection();
         }
@@ -335,7 +336,11 @@ impl DragTool {
         };
         let pointer = ctx.painter.screen_to_image(press_screen);
         let press = Point2::new(pointer.x as f64, pointer.y as f64);
-        let Some((frame, total)) = self.selection.as_ref().map(|s| (s.frame, s.total)) else {
+        let Some((frame, total)) = self
+            .selection
+            .as_ref()
+            .map(|s| (s.logic.frame, s.logic.total))
+        else {
             // No selection: rect-select, or pan on empty space.
             return self.start_empty_space_gesture(ctx, pointer, img_w, img_h);
         };
@@ -389,8 +394,8 @@ impl DragTool {
             return;
         };
         if let Some((frame, total)) = gesture.and_then(|g| g.apply(pointer, shift)) {
-            sel.frame = frame;
-            sel.total = total;
+            sel.logic.frame = frame;
+            sel.logic.total = total;
         }
     }
 
@@ -403,12 +408,13 @@ impl DragTool {
         let Some(sel) = self.selection.as_mut() else {
             return;
         };
-        let matrix = sel.total;
+        let matrix = sel.logic.total;
         // Transform all layers from the pristine originals first (one small
         // per-layer `Vec`, no span is ever collected).
 
         let mut should_abort = true;
         let computed = sel
+            .logic
             .layers
             .iter_mut()
             .map(|(idx, ls)| {
@@ -442,7 +448,7 @@ impl DragTool {
                 }
             }
         }
-        sel.tip = masks.last_history_action();
+        sel.logic.tip = masks.last_history_action();
         if clear {
             // Nothing visible left (all moved out of the image): no box to
             // show, drop the selection. The clears are still one undo step.
@@ -483,14 +489,14 @@ impl DragTool {
     fn hover_cursor(&self, ctx: &ToolContext, pointer_screen: Option<Pos2>) {
         let icon = match (&self.gesture, self.selection.as_ref(), pointer_screen) {
             (Some(Gesture::Move(_)), _, _) => CursorIcon::Grabbing,
-            (Some(Gesture::Resize(g)), Some(sel), _) => resize_cursor(&sel.frame, g.anchor),
+            (Some(Gesture::Resize(g)), Some(sel), _) => resize_cursor(&sel.logic.frame, g.anchor),
             (Some(Gesture::Rotate(_)), _, _) => CursorIcon::Grabbing,
             (Some(Gesture::Pan), _, _) => CursorIcon::AllScroll,
             (Some(Gesture::Rect(_)), _, _) => CursorIcon::Crosshair,
-            (None, Some(sel), Some(p)) => match hit_test(&*ctx.painter, p, &sel.frame) {
+            (None, Some(sel), Some(p)) => match hit_test(&*ctx.painter, p, &sel.logic.frame) {
                 HoverPart::Outside => return,
                 HoverPart::Inside => CursorIcon::Move,
-                HoverPart::Anchor(a) => resize_cursor(&sel.frame, a),
+                HoverPart::Anchor(a) => resize_cursor(&sel.logic.frame, a),
                 HoverPart::Rotate => CursorIcon::Grab,
             },
             _ => return,
@@ -509,8 +515,8 @@ impl Tool for DragTool {
                 if let (Some((base, base_total)), Some(sel)) =
                     (gesture.base_state(), self.selection.as_mut())
                 {
-                    sel.frame = base;
-                    sel.total = base_total;
+                    sel.logic.frame = base;
+                    sel.logic.total = base_total;
                     // Restored frame and matrix invalidate the uploaded pixels.
                     sel.preview.hide();
                 }
@@ -655,6 +661,7 @@ mod tests {
         tool.selection
             .as_ref()
             .expect("Selection is active")
+            .logic
             .layers
             .values()
             .next()
@@ -679,10 +686,10 @@ mod tests {
         drag_move(&mut tool, Point2::new(15.0, 12.5), Point2::new(44.5, 32.5));
         let sel = tool.selection.as_ref().unwrap();
         assert_eq!(
-            sel.total,
+            sel.logic.total,
             Matrix3::new_translation(&Vector2::new(30.0, 20.0))
         );
-        assert_eq!(sel.frame.center, Point2::new(45.0, 32.5));
+        assert_eq!(sel.logic.frame.center, Point2::new(45.0, 32.5));
         tool.commit(&mut masks, img_rect());
         // Committed content is pixel-exact: original 50px, no fringe.
         assert_eq!(committed_area(&tool), 50);
@@ -691,7 +698,7 @@ mod tests {
         drag_move(&mut tool, Point2::new(44.5, 32.5), Point2::new(20.4, 22.6));
         tool.commit(&mut masks, img_rect());
         assert_eq!(
-            tool.selection.as_ref().unwrap().total,
+            tool.selection.as_ref().unwrap().logic.total,
             Matrix3::new_translation(&Vector2::new(-24.0, -10.0))
                 * Matrix3::new_translation(&Vector2::new(30.0, 20.0))
         );
@@ -757,7 +764,7 @@ mod tests {
     fn drag_move(tool: &mut DragTool, from: Point2<f64>, to: Point2<f64>) {
         let (frame, total) = {
             let sel = tool.selection.as_ref().unwrap();
-            (sel.frame, sel.total)
+            (sel.logic.frame, sel.logic.total)
         };
         tool.gesture = Some(Gesture::Move(GestureMove {
             start: from,
@@ -783,7 +790,7 @@ mod tests {
             layer_pixels(&masks),
             Some(rect_ranges(15, 10, nz(5), nz(5)))
         );
-        let frame = tool.selection.as_ref().unwrap().frame;
+        let frame = tool.selection.as_ref().unwrap().logic.frame;
         assert_eq!(frame.center, Point2::new(17.5, 12.5));
         assert_eq!(frame.half, Vector2::new(2.5, 2.5));
     }
@@ -825,6 +832,7 @@ mod tests {
             tool.selection
                 .as_ref()
                 .unwrap()
+                .logic
                 .layers
                 .values()
                 .next()
@@ -879,14 +887,14 @@ mod tests {
         let mut masks = mask_with_two_clusters();
         let mut tool = DragTool::default();
         click(&mut tool, &mut masks, 0.0, 0.0, false);
-        assert_eq!(tool.selection.as_ref().unwrap().layers.len(), 1);
+        assert_eq!(tool.selection.as_ref().unwrap().logic.layers.len(), 1);
         click(&mut tool, &mut masks, 6.0, 3.0, true);
         let sel = tool.selection.as_ref().unwrap();
         // Same layer unions into a single entry (like rect-select).
-        assert_eq!(sel.layers.len(), 1);
-        assert_eq!(sel.layers.get(&0).unwrap().original.len(), 2);
+        assert_eq!(sel.logic.layers.len(), 1);
+        assert_eq!(sel.logic.layers.get(&0).unwrap().original.len(), 2);
         // Frame expanded to contain both clusters.
-        assert!(sel.frame.half.x >= 3.5);
+        assert!(sel.logic.frame.half.x >= 3.5);
     }
 
     #[test]
@@ -901,7 +909,7 @@ mod tests {
         click(&mut tool, &mut masks, 1.0, 0.0, true);
         click(&mut tool, &mut masks, 50.0, 50.0, true);
         let sel = tool.selection.as_ref().unwrap();
-        assert_eq!(sel.layers.len(), 1);
+        assert_eq!(sel.logic.layers.len(), 1);
         assert_eq!(masks.last_history_action(), tip_before);
     }
 
@@ -915,8 +923,8 @@ mod tests {
         click(&mut tool, &mut masks, 0.0, 0.0, false);
         click(&mut tool, &mut masks, 51.0, 50.0, true);
         let sel = tool.selection.as_ref().unwrap();
-        assert_eq!(sel.layers.len(), 2);
-        let mut layers: Vec<usize> = sel.layers.keys().copied().collect();
+        assert_eq!(sel.logic.layers.len(), 2);
+        let mut layers: Vec<usize> = sel.logic.layers.keys().copied().collect();
         layers.sort_unstable();
         assert_eq!(layers, vec![0, 1]);
     }
@@ -935,7 +943,7 @@ mod tests {
         assert!(tool.selection.is_none());
         click(&mut tool, &mut masks, 0.0, 0.0, false);
         click(&mut tool, &mut masks, 51.0, 0.0, true);
-        assert_eq!(tool.selection.as_ref().unwrap().layers.len(), 1);
+        assert_eq!(tool.selection.as_ref().unwrap().logic.layers.len(), 1);
     }
 
     #[test]
@@ -952,11 +960,11 @@ mod tests {
         click(&mut tool, &mut masks, 6.0, 3.0, true);
         let sel = tool.selection.as_ref().unwrap();
         assert_eq!(masks.last_history_action(), tip_before);
-        assert_eq!(sel.total, Matrix3::identity());
-        assert_eq!(sel.layers.len(), 1);
+        assert_eq!(sel.logic.total, Matrix3::identity());
+        assert_eq!(sel.logic.layers.len(), 1);
         // Rebaked original is the union of the placed pixels (moved cluster A)
         // and the newly added cluster B.
-        let entry0 = sel.layers.get(&0).unwrap();
+        let entry0 = sel.logic.layers.get(&0).unwrap();
         let moved_a = transform_layer(
             &ranges_from_spans(vec![Span::new(0..2, 0u32)]).unwrap(),
             &Matrix3::new_translation(&Vector2::new(5.0, 0.0)),
@@ -977,16 +985,16 @@ mod tests {
         let a = RectSelectionResult::new(0, 0, 3, 1, w, w).unwrap();
         tool.select_rect(&masks, &a, false);
         let sel = tool.selection.as_ref().unwrap();
-        assert_eq!(sel.layers.len(), 1);
+        assert_eq!(sel.logic.layers.len(), 1);
         // Frame hugs the contained cluster (0..2, 0), not the marquee.
-        assert_eq!(sel.frame.center, Point2::new(1.0, 0.5));
-        assert_eq!(sel.frame.half, Vector2::new(1.0, 0.5));
+        assert_eq!(sel.logic.frame.center, Point2::new(1.0, 0.5));
+        assert_eq!(sel.logic.frame.half, Vector2::new(1.0, 0.5));
         // Shift-rect over the second cluster unions into the same entry.
         let b = RectSelectionResult::new(4, 2, 8, 4, w, w).unwrap();
         tool.select_rect(&masks, &b, true);
         let sel = tool.selection.as_ref().unwrap();
-        assert_eq!(sel.layers.len(), 1);
-        let bounds = sel.layers.values().next().unwrap().original.bounds();
+        assert_eq!(sel.logic.layers.len(), 1);
+        let bounds = sel.logic.layers.values().next().unwrap().original.bounds();
         assert_eq!((bounds.x, bounds.y), (0, 0));
         assert_eq!(
             (
@@ -1011,6 +1019,7 @@ mod tests {
             .selection
             .as_ref()
             .unwrap()
+            .logic
             .layers
             .values()
             .next()
@@ -1020,7 +1029,7 @@ mod tests {
         assert_eq!(union_original.len(), 2);
         let (frame, _) = {
             let sel = tool.selection.as_ref().unwrap();
-            (sel.frame, sel.total)
+            (sel.logic.frame, sel.logic.total)
         };
         let east = frame.point(Vector2::new(frame.half.x, 0.0));
         drag_resize(
@@ -1030,14 +1039,14 @@ mod tests {
             Point2::new(east.x + frame.half.x, east.y),
             false,
         );
-        let total = tool.selection.as_ref().unwrap().total;
+        let total = tool.selection.as_ref().unwrap().logic.total;
         let expected = transform_layer(&union_original, &total, img_rect()).unwrap();
         tool.commit(&mut masks, img_rect());
         assert_eq!(layer_pixels(&masks), Some(expected));
         // Both areas survived the resize (no subtraction of the old area).
         let pixels = layer_pixels(&masks).unwrap();
         assert!(pixels.spans::<u32>().any(|s| s.y == 0));
-        assert_eq!(tool.selection.as_ref().unwrap().layers.len(), 1);
+        assert_eq!(tool.selection.as_ref().unwrap().logic.layers.len(), 1);
     }
 
     /// Simulate a Resize gesture from `from` to `to` through the real update
@@ -1053,7 +1062,7 @@ mod tests {
     ) {
         let (frame, total) = {
             let sel = tool.selection.as_ref().unwrap();
-            (sel.frame, sel.total)
+            (sel.logic.frame, sel.logic.total)
         };
         tool.gesture = Some(Gesture::Resize(GestureResize {
             anchor,
@@ -1080,21 +1089,21 @@ mod tests {
         let mut tool = DragTool::default();
         tool.select_layers(&masks, 0..2);
         let sel = tool.selection.as_ref().unwrap();
-        assert_eq!(sel.layers.len(), 2);
+        assert_eq!(sel.logic.layers.len(), 2);
         assert_eq!(
-            sel.layers.get(&0).unwrap().original,
+            sel.logic.layers.get(&0).unwrap().original,
             rect_ranges(0, 0, nz(2), nz(2))
         );
         assert_eq!(
-            sel.layers.get(&1).unwrap().original,
+            sel.logic.layers.get(&1).unwrap().original,
             rect_ranges(50, 0, nz(2), nz(2))
         );
-        assert_eq!(sel.total, Matrix3::identity());
+        assert_eq!(sel.logic.total, Matrix3::identity());
         // Frame tightly covers both layers, nothing else.
-        assert_eq!(sel.frame.center, Point2::new(26.0, 1.0));
-        assert_eq!(sel.frame.half, Vector2::new(26.0, 1.0));
+        assert_eq!(sel.logic.frame.center, Point2::new(26.0, 1.0));
+        assert_eq!(sel.logic.frame.half, Vector2::new(26.0, 1.0));
         // Staleness tip armed against the current history.
-        assert_eq!(sel.tip, masks.last_history_action());
+        assert_eq!(sel.logic.tip, masks.last_history_action());
     }
 
     #[test]
@@ -1103,9 +1112,9 @@ mod tests {
         let mut tool = DragTool::default();
         tool.select_layers(&masks, 2);
         let sel = tool.selection.as_ref().unwrap();
-        assert_eq!(sel.layers.len(), 1);
+        assert_eq!(sel.logic.layers.len(), 1);
         assert_eq!(
-            sel.layers.get(&2).unwrap().original,
+            sel.logic.layers.get(&2).unwrap().original,
             rect_ranges(0, 50, nz(2), nz(2))
         );
     }
@@ -1125,11 +1134,11 @@ mod tests {
         let masks = mask_with_three_layers();
         let mut tool = DragTool::default();
         tool.select_layers(&masks, ..);
-        assert_eq!(tool.selection.as_ref().unwrap().layers.len(), 3);
+        assert_eq!(tool.selection.as_ref().unwrap().logic.layers.len(), 3);
         tool.select_layers(&masks, 1..2);
         let sel = tool.selection.as_ref().unwrap();
-        assert_eq!(sel.layers.len(), 1);
-        assert!(sel.layers.get(&1).is_some());
+        assert_eq!(sel.logic.layers.len(), 1);
+        assert!(sel.logic.layers.get(&1).is_some());
     }
 
     #[test]
