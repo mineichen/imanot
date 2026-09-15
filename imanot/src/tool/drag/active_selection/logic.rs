@@ -39,10 +39,7 @@ impl LayerSelection {
     pub(crate) fn restore(&self) -> Option<SortedRanges<u32>> {
         match self.background.as_ref() {
             Some(bg) => {
-                let under = bg
-                    .spans::<u32>()
-                    .intersect(self.committed.spans())
-                    .ok()?;
+                let under = bg.spans::<u32>().intersect(self.committed.spans()).ok()?;
                 SortedRanges::try_from_span_iter_minbounds(under).ok()
             }
             _ => None,

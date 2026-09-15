@@ -23,7 +23,8 @@ impl Tool for PanTool {
         let response = &ctx.response;
 
         let drag_delta = response.drag_delta();
-        let drag_delta = (drag_delta.x.abs() > f32::EPSILON || drag_delta.y.abs() > f32::EPSILON).then_some(drag_delta);
+        let drag_delta = (drag_delta.x.abs() > f32::EPSILON || drag_delta.y.abs() > f32::EPSILON)
+            .then_some(drag_delta);
         let zoom = response.hover_pos().and_then(|hover| {
             let speed = ctx.egui.options(|o| o.input_options.scroll_zoom_speed);
             let factor = ctx
