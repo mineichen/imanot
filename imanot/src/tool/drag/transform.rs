@@ -1,6 +1,6 @@
 use egui::Pos2;
 use imask::{
-    AffineTransformHeap, ClipSpanIter, ImageDimension, ImaskSet, Rect, SortedRanges, SpanCluster,
+    AffineTransformHeap, ClipSpanIter, ImageDimension, ImaskSet, Roi, SortedRanges, SpanCluster,
 };
 use nalgebra::Matrix3;
 
@@ -14,10 +14,10 @@ use crate::{
 pub(crate) fn transform_layer(
     original: &SortedRanges<u32>,
     matrix: &Matrix3<f64>,
-    img_rect: Rect<u32>,
+    img_roi: Roi<u32>,
 ) -> Option<SortedRanges<u32>> {
     let heap = AffineTransformHeap::new(original.spans::<u32>(), matrix).ok()?;
-    let clipped = clip_heap_to_image(heap, img_rect)?;
+    let clipped = clip_heap_to_image(heap, img_roi)?;
     SortedRanges::try_from_span_iter_minbounds(clipped).ok()
 }
 
@@ -55,10 +55,10 @@ pub(crate) fn push_clear(
 /// empty intersection).
 pub(crate) fn clip_heap_to_image(
     heap: AffineTransformHeap,
-    img_rect: Rect<u32>,
+    img_roi: Roi<u32>,
 ) -> Option<ClipSpanIter<AffineTransformHeap, u32>> {
-    heap.bounds().intersection(&img_rect)?;
-    Some(heap.clip(img_rect).ok()?)
+    heap.roi().intersection(&img_roi)?;
+    Some(heap.clip(img_roi).ok()?)
 }
 
 /// Find the 8-connected cluster of `ranges` containing pixel `(x, y)`.
@@ -66,7 +66,7 @@ pub(crate) fn clip_heap_to_image(
 pub(crate) fn cluster_at(ranges: &SortedRanges<u32>, x: u32, y: u32) -> Option<SpanCluster<u32>> {
     for cluster in ranges.spans::<u32>().cluster() {
         // Fast reject on the tight cluster bounds before consuming spans.
-        if cluster.bounds().contains(&x, &y)
+        if cluster.roi().contains(&x, &y)
             && cluster
                 .clone()
                 .skip_while(|s| s.y < y)
@@ -99,12 +99,13 @@ mod tests {
         NonZeroU32::new(n).unwrap()
     }
 
-    fn img_rect() -> Rect<u32> {
-        Rect::new(0, 0, nz(100), nz(100))
+    fn img_rect() -> Roi<u32> {
+        Roi::from_dimensions(nz(100), nz(100))
     }
 
     fn rect_ranges(x: u32, y: u32, w: NonZeroU32, h: NonZeroU32) -> SortedRanges<u32> {
-        SortedRanges::try_from_span_iter(Rect::new(x, y, w, h).into_spans()).unwrap()
+        SortedRanges::try_from_span_iter(Roi::new(x..x + w.get(), y..y + h.get()).into_spans())
+            .unwrap()
     }
 
     /// Test-only `Vec` adapter: `Vec` is not `ImageDimension`, so tight
@@ -159,10 +160,10 @@ mod tests {
             img_rect(),
         )
         .unwrap();
-        let bounds = clipped.bounds();
-        assert_eq!((bounds.x, bounds.y), (98, 98));
-        assert!(bounds.x + bounds.width.get() <= 100);
-        assert!(bounds.y + bounds.height.get() <= 100);
+        let bounds = clipped.roi();
+        assert_eq!((bounds.x.start, bounds.y.start), (98, 98));
+        assert!(bounds.x.end <= 100);
+        assert!(bounds.y.end <= 100);
     }
 
     #[test]
@@ -188,9 +189,9 @@ mod tests {
         let original = rect_ranges(40, 40, nz(10), nz(20));
         let m = rotate_about(Point2::new(45.0, 50.0), std::f64::consts::FRAC_PI_2);
         let out = transform_layer(&original, &m, img_rect()).unwrap();
-        let bounds = out.bounds();
-        assert_eq!(bounds.width.get(), 20);
-        assert_eq!(bounds.height.get(), 10);
+        let bounds = out.roi();
+        assert_eq!(bounds.width().get(), 20);
+        assert_eq!(bounds.height().get(), 10);
     }
 
     #[test]
@@ -199,23 +200,23 @@ mod tests {
         let original = rect_ranges(10, 10, nz(5), nz(5));
         let m = scale_about_frame(Point2::new(10.0, 12.5), 0.0, Vector2::new(-1.0, 1.0));
         let out = transform_layer(&original, &m, img_rect()).unwrap();
-        let bounds = out.bounds();
-        assert_eq!(bounds.width.get(), 5);
-        assert_eq!(bounds.height.get(), 5);
+        let bounds = out.roi();
+        assert_eq!(bounds.width().get(), 5);
+        assert_eq!(bounds.height().get(), 5);
         // Mirrored content sits west of the pivot (imask's half-open
         // discretization lands it up to 1px overlapping, hence `<= 11`).
-        assert!(bounds.x < 10, "{bounds:?}");
-        assert!(bounds.x + bounds.width.get() <= 11, "{bounds:?}");
+        assert!(bounds.x.start < 10, "{bounds:?}");
+        assert!(bounds.x.end <= 11, "{bounds:?}");
     }
 
     #[test]
     fn cluster_at_finds_covering_cluster_only() {
         let ranges = disjoint_rects();
         let left = cluster_at(&ranges, 0, 0).unwrap();
-        assert_eq!(left.bounds(), Rect::new(0, 0, nz(2), nz(1)));
+        assert_eq!(left.roi(), Roi::new(0..2, 0..1));
         assert_eq!(left.clone().count(), 1);
         let right = cluster_at(&ranges, 6, 3).unwrap();
-        assert_eq!(right.bounds(), Rect::new(5, 3, nz(2), nz(1)));
+        assert_eq!(right.roi(), Roi::new(5..7, 3..4));
         // Pixels between/outside clusters select nothing.
         assert!(cluster_at(&ranges, 3, 0).is_none());
         assert!(cluster_at(&ranges, 0, 5).is_none());
