@@ -64,7 +64,7 @@ pub(crate) fn clip_heap_to_image(
 /// Find the 8-connected cluster of `ranges` containing pixel `(x, y)`.
 /// Returns `None` if no span covers the pixel.
 pub(crate) fn cluster_at(ranges: &SortedRanges<u32>, x: u32, y: u32) -> Option<SpanCluster<u32>> {
-    for cluster in ranges.spans::<u32>().cluster::<u32>() {
+    for cluster in ranges.spans::<u32>().cluster() {
         // Fast reject on the tight cluster bounds before consuming spans.
         if cluster.bounds().contains(&x, &y)
             && cluster

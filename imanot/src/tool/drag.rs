@@ -1145,10 +1145,10 @@ mod tests {
         let mut masks = MaskImage::new([100, 100], PixelAreaStack::default(), History::default());
         // 10x5 selection block at (10,10), 10x5 outsider block at (40,30).
         let mut spans = Vec::new();
-        for y in 10..15u32 {
+        for y in 10..15 {
             spans.push(Span::new(10..20, y));
         }
-        for y in 30..35u32 {
+        for y in 30..35 {
             spans.push(Span::new(40..50, y));
         }
         masks.add(ranges_from_spans(spans).unwrap());

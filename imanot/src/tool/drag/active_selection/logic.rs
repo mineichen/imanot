@@ -41,7 +41,7 @@ impl LayerSelection {
             Some(bg) => {
                 let under = bg
                     .spans::<u32>()
-                    .intersect(self.committed.spans::<u32>())
+                    .intersect(self.committed.spans())
                     .ok()?;
                 SortedRanges::try_from_span_iter_minbounds(under).ok()
             }
@@ -130,7 +130,7 @@ pub(crate) fn union_ranges(
     a: &SortedRanges<u32>,
     b: &SortedRanges<u32>,
 ) -> Option<SortedRanges<u32>> {
-    SortedRanges::try_from_span_iter_minbounds(a.spans::<u32>().union(b.spans::<u32>())).ok()
+    SortedRanges::try_from_span_iter_minbounds(a.spans::<u32>().union(b.spans())).ok()
 }
 
 /// `a` minus `b` as tight ranges. `None` when empty.

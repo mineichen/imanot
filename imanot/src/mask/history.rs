@@ -395,14 +395,14 @@ mod tests {
         let mut history = History::default();
         history.push(HistoryAction {
             kind: HistoryActionKind::Add(HistoryActionAdd {
-                pixel_area: Span::new(0u16..1, 0).into(),
+                pixel_area: Span::new(0..1, 0).into(),
             }),
             layer: AffectedLayer::Layer(0),
             tracked: true,
         });
         history.push(HistoryAction {
             kind: HistoryActionKind::Add(HistoryActionAdd {
-                pixel_area: Span::new(1u16..2, 0).into(),
+                pixel_area: Span::new(1..2, 0).into(),
             }),
             layer: AffectedLayer::Layer(1),
             tracked: true,
@@ -448,7 +448,7 @@ mod tests {
         history.push(untracked_add_area(0, 0));
         history.push(untracked_add_area(0, 1));
         history.push(replace_action(
-            Span::new(4u16..6, 3).into(),
+            Span::new(4..6, 3).into(),
             AffectedLayer::Layer(1),
         ));
 
@@ -464,7 +464,7 @@ mod tests {
         history.push(untracked_add_area(0, 0));
         history.push(untracked_add_area(0, 1));
         history.push(replace_action(
-            Span::new(4u16..6, 3).into(),
+            Span::new(4..6, 3).into(),
             AffectedLayer::Unspecified,
         ));
 
@@ -481,7 +481,7 @@ mod tests {
         history.push(untracked_add_area(0, 1));
         history.push(untracked_add_area(0, 2));
         history.push(replace_action(
-            Span::new(4u16..6, 3).into(),
+            Span::new(4..6, 3).into(),
             AffectedLayer::Range(1, Some(3)),
         ));
 
