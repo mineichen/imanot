@@ -19,8 +19,8 @@ log = "0.4"
 nalgebra = "0.35"
 serde = { version = "1" }
 
-[patch."https://github.com/mineichen/imask.git"]
-imask = { path = "../imask" }
+# [patch."https://github.com/mineichen/imask.git"]
+# imask = { path = "../imask" }
 
 
 [workspace.lints.clippy]
