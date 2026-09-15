@@ -427,7 +427,9 @@ impl DragTool {
             // clearing `committed` spans would otherwise erase non-selected
             // pixels a previous commit absorbed (exact overlap on landing, or
             // rasterization fringe). Empty in the common no-overlap case.
-            let restore = ls.restore();
+            let restore = ls
+                .restore()
+                .and_then(|i| SortedRanges::try_from_span_iter(i).ok());
             push_clear(masks, layer, ls.committed.clone(), first);
             first = false;
             if let Some(new) = new {
@@ -465,7 +467,9 @@ impl DragTool {
         self.settle();
         let mut first = true;
         for (layer, ls) in sel.logic.layers.into_iter() {
-            let restore = ls.restore();
+            let restore = ls
+                .restore()
+                .and_then(|i| SortedRanges::try_from_span_iter(i).ok());
             push_clear(masks, layer, ls.committed, first);
             first = false;
 
