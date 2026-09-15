@@ -15,6 +15,7 @@ imask.workspace = true
 imbuf.workspace = true
 itertools.workspace = true
 log.workspace = true
+nalgebra.workspace = true
 num-traits = "0.2"
 pulp = "0.22"
 serde = { workspace = true, features = ["derive"], optional = true }

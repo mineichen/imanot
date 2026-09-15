@@ -12,7 +12,7 @@ use imask::{
     CreateRange, ImageDimension, ImaskSet, NonZeroRange, SortedRanges, SortedRangesIter,
     SortedRangesSpanIter, Span,
 };
-use log::{debug, info, warn};
+use log::{debug, info};
 use pulp::{Arch, Simd, WithSimd};
 
 use crate::PixelArea;
@@ -203,7 +203,7 @@ impl MaskImage {
                                 target.fill(color);
                             }
                             #[cfg(debug_assertions)]
-                            warn!("Range {range:?} not contained in pixels 0..{pixels_len}");
+                            log::warn!("Range {range:?} not contained in pixels 0..{pixels_len}");
                             break;
                         };
                         target.fill(color);
@@ -215,7 +215,7 @@ impl MaskImage {
                                 composite_layer_over(target, t, layer);
                             }
                             #[cfg(debug_assertions)]
-                            warn!("Range {range:?} not contained in pixels 0..{pixels_len}");
+                            log::warn!("Range {range:?} not contained in pixels 0..{pixels_len}");
                             break;
                         };
                         composite_layer_over(target, t, layer);
@@ -254,6 +254,14 @@ impl MaskImage {
 
     pub fn take_dirty(&mut self) -> Option<AffectedLayer> {
         self.history.take_dirty()
+    }
+
+    /// The currently applied (tip) history action, or `None` if history is
+    /// empty / fully undone. Tools holding snapshots of mask ranges compare
+    /// this against the action they last saw to detect that the mask changed
+    /// underneath them (push, undo, redo or another tool's commit).
+    pub(crate) fn last_history_action(&self) -> Option<HistoryAction> {
+        self.history.iter().next_back().cloned()
     }
 
     pub fn add_history_action(&mut self, action: HistoryAction) {
@@ -356,7 +364,7 @@ impl MaskImage {
     }
     pub fn find_layer_at(&self, (x, y): (u32, u32)) -> Option<usize> {
         self.subgroups_stack().iter().rev().find_map(|(i, area)| {
-            (area.pixels.bounds().contains(&x, &y)
+            (area.pixels.roi().contains(&x, &y)
                 && area
                     .pixels
                     .spans::<u32>()
@@ -814,7 +822,7 @@ mod tests {
         mask_image.add(SortedRanges::from(Span::new(2..8, 0)));
         mask_image
             .on_layer(AffectedLayer::Range(0, Some(2)))
-            .clear(Rect::new(0u32, 0, NON_ZERO_4, NON_ZERO_1).into_spans());
+            .clear(Rect::new(0, 0, NON_ZERO_4, NON_ZERO_1).into_spans());
         assert_eq!(
             mask_image.subgroup_spans_flat().collect::<Vec<_>>(),
             vec![(0, Span::new(4..9, 0)), (1, Span::new(4..8, 0)),]
@@ -945,7 +953,7 @@ mod tests {
         let ranges = SortedRanges::from(Span::new(1..9, 0));
         mask_image.add(ranges);
 
-        mask_image.clear(Rect::new(5u32, 0, NON_ZERO_5, NON_ZERO_1).into_spans());
+        mask_image.clear(Rect::new(5, 0, NON_ZERO_5, NON_ZERO_1).into_spans());
 
         assert_eq!(
             mask_image.subgroup_spans_flat().collect::<Vec<_>>(),
@@ -986,7 +994,7 @@ mod tests {
                 )
                 .unwrap(),
                 PixelArea {
-                    pixels: SortedRanges::from(Span::new(2u32..7, 3)),
+                    pixels: SortedRanges::from(Span::new(2..7, 3)),
                     color: [0, 0, 0, 255],
                 },
             ],
@@ -1020,7 +1028,7 @@ mod tests {
         .unwrap();
         mask_image.add(layer0);
 
-        let spans1 = [Span::new(0u32..5, 3), Span::new(0u32..3, 5)].with_bounds(WIDTH_10, WIDTH_10);
+        let spans1 = [Span::new(0u32..5, 3), Span::new(0..3, 5)].with_bounds(WIDTH_10, WIDTH_10);
         let layer1 = SortedRanges::try_from_span_iter(spans1).unwrap();
         mask_image.add(layer1);
 
@@ -1072,7 +1080,7 @@ mod tests {
         let mut history = History::default();
         history.push(HistoryAction {
             kind: HistoryActionKind::Add(HistoryActionAdd {
-                pixel_area: SortedRanges::from(Span::new(0u32..2, 0)),
+                pixel_area: SortedRanges::from(Span::new(0..2, 0)),
             }),
             layer: AffectedLayer::Unspecified,
             tracked: true,
