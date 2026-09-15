@@ -58,7 +58,11 @@ impl PreviewState {
         ctx: &egui::Context,
         painter: &mut ImagePainter,
         spans: impl Iterator<Item = Span<u32>> + ImageDimension,
+        allow_reposition: bool,
     ) {
+        if allow_reposition && self.try_reposition(painter, spans.bounds()) {
+            return;
+        }
         let bounds = spans.bounds();
         let w = bounds.width.get() as usize;
         let h = bounds.height.get() as usize;
@@ -260,7 +264,7 @@ mod tests {
         let mut preview = PreviewState::new();
         assert!(!preview.is_visible());
 
-        preview.show(&ctx, &mut painter, bounds(10, 20, 4, 3).into_spans());
+        preview.show(&ctx, &mut painter, bounds(10, 20, 4, 3).into_spans(), false);
         assert!(preview.is_visible());
         assert_eq!(preview.origin, [10, 20]);
 

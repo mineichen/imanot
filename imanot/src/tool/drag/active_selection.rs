@@ -54,7 +54,7 @@ impl ActiveSelection {
     ) {
         if self.preview.is_visible() {
             self.preview.paint(painter);
-            draw_overlay(painter, &self.frame);
+            draw_overlay(painter, &self.logic.frame);
         } else {
             self.render_transform(egui_ctx, painter, img_rect, false);
         }
@@ -81,11 +81,7 @@ impl ActiveSelection {
     }
 
     pub(crate) fn rebase(&mut self, tip: Option<HistoryAction>) {
-        self.layers.values_mut().for_each(|l| {
-            l.original = l.committed.clone();
-        });
-        self.total = Matrix3::identity();
-        self.tip = tip;
+        self.logic.rebase(tip);
         // Rebasing swaps the snapshot content and the accumulated matrix
         // the preview is rasterized from, so the uploaded pixels are stale.
         self.preview.hide();
@@ -105,39 +101,37 @@ impl ActiveSelection {
         img_rect: imask::Rect<u32>,
         allow_reposition: bool,
     ) {
-        let matrix = self.total;
+        let matrix = self.logic.total;
         // One lazy iterator per layer (analytic transform ∩ image), merged
         // into a single ordered, self-bounded span stream: no span is ever
         // collected.
-        let chains = self.layers.values().filter_map(|ls| {
+        let chains = self.logic.layers.values().filter_map(|ls| {
             let heap = AffineTransformHeap::new(ls.original.spans::<u32>(), &matrix).ok()?;
             clip_heap_to_image(heap, img_rect)
         });
 
         match UnionAll::new(chains) {
             Ok(all) => {
-                if !(allow_reposition && self.preview.try_reposition(painter, all.bounds())) {
-                    self.preview.show(egui_ctx, painter, all);
-                }
+                self.preview.show(egui_ctx, painter, all, allow_reposition);
             }
             Err(_) => {
                 self.preview.hide();
             }
         }
-        draw_overlay(painter, &self.frame);
+        draw_overlay(painter, &self.logic.frame);
     }
 }
 
-impl Deref for ActiveSelection {
-    type Target = ActiveSelectionLogic;
+// impl Deref for ActiveSelection {
+//     type Target = ActiveSelectionLogic;
 
-    fn deref(&self) -> &Self::Target {
-        &self.logic
-    }
-}
+//     fn deref(&self) -> &Self::Target {
+//         &self.logic
+//     }
+// }
 
-impl DerefMut for ActiveSelection {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.logic
-    }
-}
+// impl DerefMut for ActiveSelection {
+//     fn deref_mut(&mut self) -> &mut Self::Target {
+//         &mut self.logic
+//     }
+// }
