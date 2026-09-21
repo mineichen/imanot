@@ -90,7 +90,11 @@ impl PreviewState {
     /// Only valid for pure translations: same size means same pixels.
     pub(crate) fn try_reposition(&mut self, painter: &mut ImagePainter, bounds: Roi<u32>) -> bool {
         if !self.texture.is_some()
-            || self.size != [bounds.width().get() as usize, bounds.height().get() as usize]
+            || self.size
+                != [
+                    bounds.width().get() as usize,
+                    bounds.height().get() as usize,
+                ]
         {
             return false;
         }
