@@ -332,14 +332,15 @@ impl DragTool {
 
     /// Commit the current transform (see [`ActiveSelection::commit_transform`]).
     /// If nothing remains visible, the selection is dropped — an empty box is
-    /// never shown.
+    /// never shown. Either way the in-progress gesture ends on mouseup, so it
+    /// is always settled: otherwise the tool stays stuck in the transform
+    /// branch and re-commits the old gesture every frame.
     fn commit(&mut self, masks: &mut MaskImage, img_roi: Roi<u32>) {
         if let Some(sel) = self.selection.take() {
             if let Some(sel) = sel.commit_transform(masks, img_roi) {
                 self.selection = Some(sel);
-            } else {
-                self.settle();
             }
+            self.settle();
         };
     }
 
@@ -656,6 +657,36 @@ mod tests {
         let frame = tool.selection.as_ref().unwrap().frame();
         assert_eq!(frame.center, Point2::new(17.5, 12.5));
         assert_eq!(frame.half, Vector2::new(2.5, 2.5));
+    }
+
+    #[test]
+    fn commit_drops_gesture_after_mouseup() {
+        // Mouseup ends the transform gesture: the commit keeps the selection
+        // (idle, for further gestures) but must drop the in-progress gesture.
+        // Otherwise the tool stays stuck in the Move branch and re-commits or
+        // re-renders the old gesture on every following frame.
+        let (mut masks, original) = mask_with_rect(10, 10);
+        let mut tool = DragTool::default();
+        select_layer(&mut tool, &masks, original);
+        let (frame, total) = {
+            let sel = tool.selection.as_ref().unwrap();
+            sel.snapshot_transform()
+        };
+        tool.gesture = Some(Gesture::Move(GestureMove {
+            start: Point2::new(12.5, 12.5),
+            base: frame,
+            base_total: total,
+        }));
+        tool.update_gesture_frame(Point2::new(17.5, 12.5), false);
+        tool.commit(&mut masks, img_roi());
+        assert!(
+            tool.gesture.is_none(),
+            "gesture must be dropped after mouseup commit"
+        );
+        assert!(
+            tool.selection.is_some(),
+            "selection stays idle after a successful move"
+        );
     }
 
     #[test]
