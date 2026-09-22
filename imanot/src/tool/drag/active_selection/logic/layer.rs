@@ -48,8 +48,7 @@ impl LayerSelection {
     /// case) — then commit stays a Clear + Add pair.
     pub(super) fn restore(&self) -> Option<impl Iterator<Item = Span<u32>> + ImageDimension> {
         let bg = self.background.as_ref()?;
-        let under = bg.spans::<u32>().intersect(self.committed.spans()).ok()?;
-        Some(under)
+        bg.spans::<u32>().intersect(self.committed.spans()).ok()
     }
 }
 
