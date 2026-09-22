@@ -425,8 +425,7 @@ impl Tool for DragTool {
                 return;
             }
             Some(Gesture::Rect(rect_selection)) => {
-                let result = rect_selection.drag_finished(&mut ctx);
-                if let Some(result) = result {
+                if let Some(result) = rect_selection.drag_finished(&mut ctx) {
                     // Shift on release adds to the selection instead of
                     // replacing it.
                     let additive = ctx.egui.input(|i| i.modifiers.shift);
