@@ -4,15 +4,14 @@ use std::collections::btree_map::Entry;
 use imask::{ImageDimension, Roi, SortedRanges, Span};
 use nalgebra::Matrix3;
 
-use super::super::frame::{Frame, union_bounds};
+use super::super::frame::Frame;
 use super::super::transform::transform_layer;
 use crate::tool::drag::transform::{build_add_untracked, build_clear_untracked};
 use crate::{HistoryAction, MaskImage};
 
 mod layer;
 
-use layer::LayerSelection;
-pub(crate) use layer::{subtract_ranges, subtract_ranges_collect_subtrahend};
+pub(in crate::tool::drag) use layer::LayerSelection;
 
 /// Pure selection logic: snapshot content, accumulated transform and frame.
 /// GPU-free on purpose, so unit tests stay context-free. The live preview
@@ -57,23 +56,24 @@ impl ActiveSelectionLogic {
         }
     }
 
-    /// Fresh multi-layer selection from rect-clipped triples. Returns `None`
-    /// when empty so callers drop instead of showing an empty box. The frame
-    /// tightly covers the contained pixels, never the queried boxes.
-    pub(crate) fn fresh_from_clipped(
-        parts: impl Iterator<Item = (usize, SortedRanges<u32>, Option<SortedRanges<u32>>)>,
+    pub(crate) fn fresh_from_sorted_ranges_iter(
+        first: (usize, LayerSelection),
+        parts: impl Iterator<Item = (usize, LayerSelection)>,
         tip: Option<HistoryAction>,
-    ) -> Option<Self> {
-        let layers = parts
-            .map(|(layer, ranges, background)| (layer, LayerSelection::fresh(ranges, background)))
+    ) -> Self {
+        let mut content = first.1.original.roi();
+        let layers = std::iter::once(first)
+            .chain(parts.inspect(|x| {
+                content = content.union(&x.1.original.roi());
+            }))
             .collect::<BTreeMap<_, _>>();
-        let content = union_bounds(layers.values().map(|x| x.original.roi()))?;
-        Some(Self {
+
+        Self {
             total: Matrix3::identity(),
             frame: Frame::around(content),
             layers,
             tip,
-        })
+        }
     }
 
     /// Add `ranges` on layer `idx`, unioning into the existing entry when the
@@ -105,29 +105,6 @@ impl ActiveSelectionLogic {
                 }
             }
         }
-    }
-
-    /// Fresh selection from raw per-layer span streams carrying their own
-    /// bounds: rebuilds tight ranges per layer (attached bounds may cover
-    /// the whole image, e.g. layers loaded from storage, and must not size
-    /// the selection or the transform output). Layers without visible pixels
-    /// are skipped; `None` when empty so callers drop instead of showing an
-    /// empty box.
-    pub(crate) fn fresh_from_spans<S>(
-        parts: impl Iterator<Item = (usize, S)>,
-        tip: Option<HistoryAction>,
-    ) -> Option<Self>
-    where
-        S: Iterator<Item = Span<u32>> + ImageDimension,
-    {
-        Self::fresh_from_clipped(
-            parts.filter_map(|(idx, spans)| {
-                SortedRanges::try_from_span_iter_minbounds(spans)
-                    .ok()
-                    .map(|ranges| (idx, ranges, None))
-            }),
-            tip,
-        )
     }
 
     /// Shift-add batch: bake placed pixels into the snapshot and reset the

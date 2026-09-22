@@ -1,15 +1,15 @@
-use std::sync::Arc;
+use std::{iter::once, sync::Arc};
 
 use egui::{CursorIcon, Pos2, Vec2};
 use futures::FutureExt;
-use imask::{ImageDimension, ImaskSet, Roi, SortedRanges, Span};
+use imask::{ImageDimension, ImaskSet, Roi, SortedRanges, SortedRangesSpanBuilder, SpanCluster};
 #[cfg(test)]
 use imask::{SpanBoundsBuilder, WithRoi};
 use nalgebra::Point2;
 
 use crate::{
     AffectedLayer, MaskImage, RectSelection, RectSelectionResult, Tool, ToolContext, ToolFactory,
-    tool::drag::active_selection::logic::subtract_ranges_collect_subtrahend,
+    tool::drag::active_selection::{ActiveSelectionLogic, LayerSelection},
 };
 
 mod active_selection;
@@ -18,7 +18,7 @@ mod gesture;
 mod overlay;
 mod transform;
 
-use active_selection::{ActiveSelection, subtract_ranges};
+use active_selection::ActiveSelection;
 use gesture::{Gesture, GestureMove, GestureResize, GestureRotate};
 use overlay::{HoverPart, hit_test, resize_cursor};
 use transform::{clamp_pixel, cluster_at};
@@ -139,8 +139,8 @@ impl DragTool {
         // a click is "empty space" when no *affected* layer covers it, even if
         // an unaffected layer has a pixel there — then a non-additive click
         // clears the selection below.
-        let Some(idx) = masks.subgroups_stack().iter().rev().find_map(|(i, area)| {
-            (self.layer.affects(i) && area.pixels.contains(x, y)).then_some(i)
+        let Some((idx, area)) = masks.subgroups_stack().iter().rev().find_map(|(i, area)| {
+            (self.layer.affects(i) && area.pixels.contains(x, y)).then_some((i, area))
         }) else {
             if !additive {
                 self.drop_selection();
@@ -154,21 +154,16 @@ impl DragTool {
         if additive && self.covers_on_layer(idx, x, y) {
             return;
         }
-        let Some(area) = masks.subgroups_stack().get(idx) else {
-            return;
-        };
         let Some(cluster) = cluster_at(&area.pixels, x, y) else {
             return;
         };
         // Non-selected layer content: re-added under every cleared footprint
         // so later moves cannot erase it.
-
         let (background, original) = subtract_ranges_collect_subtrahend(&area.pixels, cluster);
-        let Ok(original) = original else { return };
 
         if additive && let Some(sel) = &mut self.selection {
             sel.merge_layers(
-                std::iter::once((idx, original, background)),
+                once((idx, original, background)),
                 masks.last_history_action(),
             );
         } else {
@@ -192,49 +187,37 @@ impl DragTool {
         // the boundary — everything inside the drag tool uses `Roi`.
         let roi = Roi::from(result.rect());
         let layer = self.layer;
-        let mut layers = masks.subgroups_stack().iter().filter_map(|(idx, area)| {
-            if !layer.affects(idx) {
-                return None;
-            }
-            // `minbounds` shrinks the (possibly whole-image) layer bounds to
-            // the clipped content in a single pass — no intermediate `Vec`.
-            // The background (layer minus snapshot) travels along so later
-            // commits can restore outsiders under cleared footprints.
-            let clipped = area.pixels.spans::<u32>().clip(roi).ok()?;
-            let ranges = SortedRanges::try_from_span_iter_minbounds(clipped).ok()?;
-            let background = subtract_ranges(&area.pixels, ranges.spans());
-            Some((idx, ranges, background))
-        });
+        let mut layers = masks
+            .subgroups_stack()
+            .iter_filtered(layer)
+            .filter_map(|(idx, area)| {
+                // `minbounds` shrinks the (possibly whole-image) layer bounds to
+                // the clipped content in a single pass — no intermediate `Vec`.
+                // The background (layer minus snapshot) travels along so later
+                // commits can restore outsiders under cleared footprints.
+                let clipped = area.pixels.spans::<u32>().clip(roi).ok()?;
+                let ranges = SortedRanges::try_from_span_iter_minbounds(clipped).ok()?;
+                let background = SortedRanges::try_from_span_iter_minbounds(
+                    area.pixels.spans::<u32>().subtract(ranges.spans()),
+                )
+                .ok();
+                Some((idx, ranges, background))
+            });
         if let Some(first) = layers.next() {
             if additive && let Some(sel) = self.selection.as_mut() {
-                sel.merge_layers(
-                    std::iter::once(first).chain(layers),
-                    masks.last_history_action(),
-                );
-                return;
+                sel.merge_layers(once(first).chain(layers), masks.last_history_action());
+            } else {
+                self.selection = Some(ActiveSelection::from_logic(
+                    ActiveSelectionLogic::fresh_from_sorted_ranges_iter(
+                        (first.0, LayerSelection::fresh(first.1, first.2)),
+                        layers.map(|(idx, r, bg)| (idx, LayerSelection::fresh(r, bg))),
+                        masks.last_history_action(),
+                    ),
+                ));
             }
-            self.select_rect_fresh(masks, std::iter::once(first).chain(layers));
         } else {
             // Nothing selected: no box to show, drop any previous selection.
             self.drop_selection();
-        }
-    }
-
-    /// Fresh (replacing) selection from rect-clipped `(layer, ranges,
-    /// background)` triples with `original == committed`. The frame hugs the
-    /// contained pixels — the dragged box may cover empty areas, which must
-    /// not size anchors and pivots.
-    fn select_rect_fresh(
-        &mut self,
-        masks: &MaskImage,
-        layers: impl Iterator<Item = (usize, SortedRanges<u32>, Option<SortedRanges<u32>>)>,
-    ) {
-        // Each snapshot already carries tight bounds (`minbounds` over the
-        // imask-clipped spans); the frame hugs the contained pixels, never
-        // the queried boxes. `None` means no pixels: no box to show.
-        self.selection = ActiveSelection::fresh_from_clipped(layers, masks.last_history_action());
-        if self.selection.is_none() {
-            self.settle();
         }
     }
 
@@ -248,12 +231,23 @@ impl DragTool {
     /// dropped (an empty box is never shown). Unlike click/rect selection this
     /// does not intersect with the tool's own `AffectedLayer` filter — the
     /// caller names the layers explicitly.
-    pub fn select_layers<S>(&mut self, masks: &MaskImage, layers: impl Iterator<Item = (usize, S)>)
-    where
-        S: Iterator<Item = Span<u32>> + ImageDimension,
-    {
-        self.selection = ActiveSelection::fresh_from_spans(layers, masks.last_history_action());
-        self.settle();
+    pub fn select_layers(
+        &mut self,
+        masks: &MaskImage,
+        mut layers: impl Iterator<Item = (usize, SortedRanges<u32>)>,
+    ) {
+        if let Some(first) = layers.next() {
+            self.selection = Some(ActiveSelection::from_logic(
+                ActiveSelectionLogic::fresh_from_sorted_ranges_iter(
+                    (first.0, LayerSelection::fresh(first.1, None)),
+                    layers.map(|(a, b)| (a, LayerSelection::fresh(b, None))),
+                    masks.last_history_action(),
+                ),
+            ));
+        } else {
+            self.selection = None;
+            self.settle();
+        }
     }
     /// Decide what a fresh drag does and store it in `self.gesture`.
     /// Hit-testing and gesture origins use the PRESS position: with click +
@@ -376,6 +370,23 @@ impl DragTool {
         ctx.egui.set_cursor_icon(icon);
     }
 }
+fn subtract_ranges_collect_subtrahend(
+    a: &SortedRanges<u32>,
+    b: SpanCluster<u32>,
+) -> (Option<SortedRanges<u32>>, SortedRanges<u32>) {
+    let span_builder = SortedRangesSpanBuilder::new(b.roi());
+    let mut b = b.fold_inline(span_builder, |b, n| {
+        b.add(*n);
+    });
+
+    let r = SortedRanges::try_from_span_iter_minbounds(a.spans::<u32>().subtract(&mut b)).ok();
+    (
+        r,
+        b.finish_all()
+            .build()
+            .expect("SpanCluster always contains spans"),
+    )
+}
 
 impl Tool for DragTool {
     fn handle_interaction(&mut self, mut ctx: ToolContext) {
@@ -489,7 +500,7 @@ impl Tool for DragTool {
 mod tests {
     use std::num::NonZeroU32;
 
-    use imask::ImageDimension;
+    use imask::{ImageDimension, Span};
     use nalgebra::{Matrix3, Vector2};
 
     use super::frame::Anchor;
@@ -504,14 +515,13 @@ mod tests {
     fn stack_spans(
         masks: &MaskImage,
         which: impl Into<AffectedLayer>,
-    ) -> impl Iterator<Item = (usize, impl Iterator<Item = Span<u32>> + ImageDimension + '_)> + '_
-    {
+    ) -> impl Iterator<Item = (usize, SortedRanges<u32>)> + '_ {
         let which = which.into();
         masks
             .subgroups_stack()
             .iter()
             .filter(move |(i, _)| which.affects(*i))
-            .map(|(i, a)| (i, a.pixels.spans::<u32>()))
+            .map(|(i, a)| (i, a.pixels.clone()))
     }
 
     /// Test-only `Vec` adapter: `Vec` is not `ImageDimension`, so tight
@@ -611,6 +621,7 @@ mod tests {
         (masks, original)
     }
 
+    #[cfg(test)]
     fn select_layer(tool: &mut DragTool, masks: &MaskImage, original: SortedRanges<u32>) {
         tool.selection = Some(ActiveSelection::fresh_single(
             0,

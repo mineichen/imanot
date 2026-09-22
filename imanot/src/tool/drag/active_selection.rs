@@ -9,7 +9,8 @@ use super::{overlay::draw_overlay, transform::clip_heap_to_image};
 pub(crate) mod logic;
 pub(crate) mod preview;
 
-pub(crate) use logic::{ActiveSelectionLogic, subtract_ranges};
+pub(crate) use logic::ActiveSelectionLogic;
+pub(in crate::tool::drag) use logic::LayerSelection;
 
 /// A live selection: pure snapshot logic plus its small preview texture. The
 /// preview starts hidden (the first render uploads it) and dies with the
@@ -65,27 +66,6 @@ impl ActiveSelection {
             logic,
             preview: preview::PreviewState::new(),
         }
-    }
-
-    /// Fresh multi-layer selection with a hidden preview (see
-    /// [`ActiveSelectionLogic::fresh_from_clipped`]).
-    pub(crate) fn fresh_from_clipped(
-        parts: impl Iterator<Item = (usize, SortedRanges<u32>, Option<SortedRanges<u32>>)>,
-        tip: Option<HistoryAction>,
-    ) -> Option<Self> {
-        ActiveSelectionLogic::fresh_from_clipped(parts, tip).map(Self::from_logic)
-    }
-
-    /// Fresh selection from raw per-layer span streams (see
-    /// [`ActiveSelectionLogic::fresh_from_spans`]); `None` when empty.
-    pub(crate) fn fresh_from_spans<S>(
-        parts: impl Iterator<Item = (usize, S)>,
-        tip: Option<HistoryAction>,
-    ) -> Option<Self>
-    where
-        S: Iterator<Item = Span<u32>> + ImageDimension,
-    {
-        ActiveSelectionLogic::fresh_from_spans(parts, tip).map(Self::from_logic)
     }
 
     /// Shift-add batch with a single preview invalidation (see

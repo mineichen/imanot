@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use imask::SortedRanges;
 
-use crate::PixelArea;
+use crate::{AffectedLayer, PixelArea};
 
 // Keep the enum, so we can iter over &PixelArea, which would not be possible for struct { color: [u8;4], ranges: Option<Ranges> }
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -87,6 +87,13 @@ impl PixelAreaStack {
 
     pub fn is_empty(&self) -> bool {
         self.areas.iter().all(|l| matches!(l, Layer::Empty(_)))
+    }
+
+    pub fn iter_filtered(
+        &self,
+        layer: AffectedLayer,
+    ) -> impl DoubleEndedIterator<Item = (usize, &'_ PixelArea)> {
+        self.iter().filter(move |(l, _)| layer.affects(*l))
     }
 
     pub fn iter(&self) -> impl DoubleEndedIterator<Item = (usize, &'_ PixelArea)> {

@@ -176,11 +176,6 @@ pub(crate) fn snap_angle(angle: f64) -> f64 {
     ((angle.to_degrees() / ROTATE_SNAP_DEG).round() * ROTATE_SNAP_DEG).to_radians()
 }
 
-/// Union of content bounds. `None` when empty.
-pub(crate) fn union_bounds(bounds: impl IntoIterator<Item = Roi<u32>>) -> Option<Roi<u32>> {
-    bounds.into_iter().reduce(|a, b| a.union(&b))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
