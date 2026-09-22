@@ -82,10 +82,21 @@ impl Tool for RectTool {
             && let Some((x, y)) = ctx.cursor_image_pos()
         {
             let (image_width, image_height) = ctx.image.image.adjust.dimensions();
-            let x = x.min(image_width.get() as usize - 1);
-            let y = y.min(image_height.get() as usize - 1);
-            let x: u16 = x.try_into().unwrap();
-            let y: u16 = y.try_into().unwrap();
+
+            let coords = u16::try_from(image_width.get() - 1).and_then(|width| {
+                let height = u16::try_from(image_height.get() - 1)?;
+                let x = u16::try_from(x)?;
+                let y = u16::try_from(y)?;
+
+                Ok((x.min(width), y.min(height)))
+            });
+            let (x, y) = match coords {
+                Ok(x) => x,
+                Err(e) => {
+                    log::warn!("Cannot to u16: {e:?}");
+                    return;
+                }
+            };
             let span = Span::new(x..x + 1, y);
             match self.mode {
                 Mode::Insert => {
