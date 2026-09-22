@@ -936,7 +936,7 @@ mod tests {
         let ranges = SortedRanges::from(Span::new(2..8, 0));
         mask_image.add(ranges);
 
-        mask_image.clear(Rect::new(0u32, 0, NON_ZERO_4, NON_ZERO_1).into_spans());
+        mask_image.clear(Rect::new(0, 0, NON_ZERO_4, NON_ZERO_1).into_spans());
 
         assert_eq!(
             mask_image.subgroup_spans_flat().collect::<Vec<_>>(),
@@ -970,7 +970,7 @@ mod tests {
         let ranges = SortedRanges::from(Span::new(2..8, 0));
         mask_image.add(ranges);
 
-        mask_image.clear(Rect::new(4u32, 0, NON_ZERO_2, NON_ZERO_1).into_spans());
+        mask_image.clear(Rect::new(4, 0, NON_ZERO_2, NON_ZERO_1).into_spans());
 
         assert_eq!(
             mask_image.subgroup_spans_flat().collect::<Vec<_>>(),
