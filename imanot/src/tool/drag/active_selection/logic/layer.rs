@@ -12,7 +12,7 @@ use imask::{ImageDimension, ImaskSet, PipelineError, SortedRanges, SortedRangesS
 /// shift-add): every commit re-adds the background under the cleared
 /// footprint, so pixels outside the original selection always remain
 /// unchanged — even ones a previous commit overlapped.
-pub(super) struct LayerSelection {
+pub(in super::super::super) struct LayerSelection {
     pub(super) original: SortedRanges<u32>,
     pub(super) committed: SortedRanges<u32>,
     pub(super) background: Option<SortedRanges<u32>>,
@@ -21,7 +21,10 @@ pub(super) struct LayerSelection {
 impl LayerSelection {
     /// Fresh snapshot: nothing transformed yet, so placed pixels equal the
     /// pristine original.
-    pub(super) fn fresh(ranges: SortedRanges<u32>, background: Option<SortedRanges<u32>>) -> Self {
+    pub(in crate::tool::drag) fn fresh(
+        ranges: SortedRanges<u32>,
+        background: Option<SortedRanges<u32>>,
+    ) -> Self {
         Self {
             original: ranges.clone(),
             committed: ranges,
@@ -33,10 +36,12 @@ impl LayerSelection {
         union_ranges(&self.original, ranges)
             .zip(union_ranges(&self.committed, ranges))
             .map(|(original, committed)| {
-                self.background = self
-                    .background
-                    .take()
-                    .and_then(|bg| subtract_ranges(&bg, ranges.spans()));
+                self.background = self.background.take().and_then(|bg| {
+                    SortedRanges::try_from_span_iter_minbounds(
+                        bg.spans::<u32>().subtract(ranges.spans()),
+                    )
+                    .ok()
+                });
                 self.original = original;
                 self.committed = committed;
                 self
@@ -57,28 +62,4 @@ impl LayerSelection {
 /// the union stream; `minbounds` guarantees tight bounds either way.
 fn union_ranges(a: &SortedRanges<u32>, b: &SortedRanges<u32>) -> Option<SortedRanges<u32>> {
     SortedRanges::try_from_span_iter_minbounds(a.spans::<u32>().union(b.spans())).ok()
-}
-
-/// `a` minus `b` as tight ranges. `None` when empty.
-pub(crate) fn subtract_ranges(
-    a: &SortedRanges<u32>,
-    b: impl Iterator<Item = Span<u32>>,
-) -> Option<SortedRanges<u32>> {
-    SortedRanges::try_from_span_iter_minbounds(a.spans::<u32>().subtract(b)).ok()
-}
-
-pub(crate) fn subtract_ranges_collect_subtrahend(
-    a: &SortedRanges<u32>,
-    b: impl FusedIterator<Item = Span<u32>> + ImageDimension,
-) -> (
-    Option<SortedRanges<u32>>,
-    Result<SortedRanges<u32>, PipelineError>,
-) {
-    let span_builder = SortedRangesSpanBuilder::new(b.roi());
-    let mut b = b.fold_inline(span_builder, |b, n| {
-        b.add(*n);
-    });
-
-    let r = SortedRanges::try_from_span_iter_minbounds(a.spans::<u32>().subtract(&mut b)).ok();
-    (r, b.finish_all().build())
 }
