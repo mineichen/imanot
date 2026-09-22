@@ -462,6 +462,7 @@ impl Tool for DragTool {
                 }
                 if ctx.response.drag_stopped() || pointer.is_none() {
                     self.commit(&mut ctx.image.masks, img_roi);
+                    return;
                 } else if let Some(sel) = self.selection.as_mut() {
                     let moved = matches!(self.gesture, Some(Gesture::Move(_)));
                     sel.render_transform(ctx.egui, &mut *ctx.painter, img_roi, moved);
@@ -500,7 +501,7 @@ impl Tool for DragTool {
 mod tests {
     use std::num::NonZeroU32;
 
-    use imask::{ImageDimension, Span};
+    use imask::Span;
     use nalgebra::{Matrix3, Vector2};
 
     use super::frame::Anchor;

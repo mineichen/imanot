@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::collections::btree_map::Entry;
 
-use imask::{ImageDimension, Roi, SortedRanges, Span};
+use imask::{ImageDimension, Roi, SortedRanges};
 use nalgebra::Matrix3;
 
 use super::super::frame::Frame;

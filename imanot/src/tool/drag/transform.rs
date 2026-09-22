@@ -6,7 +6,6 @@ use nalgebra::Matrix3;
 
 use crate::{
     AffectedLayer, HistoryAction, HistoryActionAdd, HistoryActionClear, HistoryActionKind,
-    MaskImage,
 };
 
 /// Transform `original` by `matrix`, clipped to the image. `None` if nothing
