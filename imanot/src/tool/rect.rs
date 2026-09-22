@@ -4,7 +4,7 @@ use std::{
 };
 
 use futures::FutureExt;
-use imask::{Rect, SortedRanges, Span};
+use imask::{Roi, SortedRanges, Span};
 
 use crate::{
     AffectedLayer, CursorImage, DrawTool, MaskActionBuilder, MaskDefaultActions, Mode,
@@ -108,7 +108,7 @@ impl Tool for RectTool {
                         .add(ranges);
                 }
                 Mode::Clear => {
-                    let rect = Rect::from(Span::<u32>::from(span));
+                    let rect = Roi::from(Span::<u32>::from(span));
                     ctx.image
                         .masks
                         .on_layer(self.layer)

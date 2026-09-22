@@ -1,4 +1,4 @@
-use imask::{AffineTransformHeap, ImageDimension, Roi, SortedRanges, Span, UnionAll};
+use imask::{AffineTransformHeap, Roi, SortedRanges, UnionAll};
 use nalgebra::Matrix3;
 
 use crate::{HistoryAction, ImagePainter, MaskImage};

@@ -1,6 +1,4 @@
-use std::iter::FusedIterator;
-
-use imask::{ImageDimension, ImaskSet, PipelineError, SortedRanges, SortedRangesSpanBuilder, Span};
+use imask::{ImageDimension, ImaskSet, SortedRanges, Span};
 
 /// One selected layer: the pristine `original` ranges (snapshotted at
 /// selection time, never modified) plus the `committed` ranges (what the last
