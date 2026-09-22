@@ -9,8 +9,6 @@ use imask::{
     ImageDimension, ImaskSet, Roi, SortedRanges, SortedRangesSpanBuilder,
     SortedRangesTightSpanBuilder, Span, SpanCluster,
 };
-#[cfg(test)]
-use imask::{SpanBoundsBuilder, WithRoi};
 use nalgebra::Point2;
 
 use crate::{
@@ -24,6 +22,9 @@ mod frame;
 mod gesture;
 mod overlay;
 mod transform;
+
+#[cfg(test)]
+mod test_support;
 
 use active_selection::ActiveSelection;
 use gesture::{Gesture, GestureMove, GestureResize, GestureRotate};
@@ -534,47 +535,14 @@ impl Tool for DragTool {
 
 #[cfg(test)]
 mod tests {
-    use std::num::NonZeroU32;
-
     use imask::Span;
     use nalgebra::{Matrix3, Vector2};
 
     use super::frame::Anchor;
+    use super::test_support::*;
     use super::transform::transform_layer;
     use super::*;
-
-    /// Test-only `Vec` adapter: `Vec` is not `ImageDimension`, so tight
-    /// bounds are tracked natively via `SpanBoundsBuilder` first.
-    fn ranges_from_spans(spans: Vec<Span<u32>>) -> Option<SortedRanges<u32>> {
-        let tight = spans
-            .iter()
-            .copied()
-            .collect::<SpanBoundsBuilder<u32>>()
-            .build()
-            .ok()?;
-        SortedRanges::try_from_span_iter(WithRoi::new(spans.into_iter(), tight)).ok()
-    }
-
-    fn rect_ranges(x: u32, y: u32, w: NonZeroU32, h: NonZeroU32) -> SortedRanges<u32> {
-        SortedRanges::try_from_span_iter(Roi::new(x..x + w.get(), y..y + h.get()).into_spans())
-            .unwrap()
-    }
-
-    fn nz(n: u32) -> NonZeroU32 {
-        NonZeroU32::new(n).unwrap()
-    }
-
-    fn img_roi() -> Roi<u32> {
-        Roi::from_dimensions(nz(100), nz(100))
-    }
-
-    /// Pixel area of the first layer's committed selection content.
-    fn committed_area(tool: &DragTool) -> usize {
-        tool.selection
-            .as_ref()
-            .expect("Selection is active")
-            .first_committed_area()
-    }
+    use crate::MaskDefaultActions;
 
     #[test]
     fn fractional_move_snaps_to_whole_pixels() {
@@ -590,24 +558,37 @@ mod tests {
         drag_move(&mut tool, Point2::new(15.0, 12.5), Point2::new(44.5, 32.5));
         let sel = tool.selection.as_ref().unwrap();
         assert_eq!(
-            sel.total_for_test(),
+            sel.snapshot_transform().1,
             Matrix3::new_translation(&Vector2::new(30.0, 20.0))
         );
         assert_eq!(sel.frame().center, Point2::new(45.0, 32.5));
         tool.commit(&mut masks, img_roi());
-        // Committed content is pixel-exact: original 50px, no fringe.
-        assert_eq!(committed_area(&tool), 50);
-        assert!(outsider_block_ok(&masks));
-        // Second fractional move: still exact, outsiders still intact.
+        // Committed content is pixel-exact: the moved block lands exactly on
+        // the outsider block, no fringe rows anywhere. (Span comparison: the
+        // mask keeps the coordinate frame's bounds, not tight ones.)
+        assert_eq!(
+            layer_pixels(&masks).map(|p| p.spans::<u32>().collect::<Vec<_>>()),
+            Some(rect_ranges(40, 30, nz(10), nz(5)).spans::<u32>().collect())
+        );
+        // Second fractional move: still exact, only it and the outsiders
+        // remain.
         drag_move(&mut tool, Point2::new(44.5, 32.5), Point2::new(20.4, 22.6));
         tool.commit(&mut masks, img_roi());
         assert_eq!(
-            tool.selection.as_ref().unwrap().total_for_test(),
+            tool.selection.as_ref().unwrap().snapshot_transform().1,
             Matrix3::new_translation(&Vector2::new(-24.0, -10.0))
                 * Matrix3::new_translation(&Vector2::new(30.0, 20.0))
         );
-        assert_eq!(committed_area(&tool), 50);
-        assert!(outsider_block_ok(&masks));
+        let expected = SortedRanges::<u32>::try_from_span_iter(
+            rect_ranges(16, 20, nz(10), nz(5))
+                .spans::<u32>()
+                .union(rect_ranges(40, 30, nz(10), nz(5)).spans()),
+        )
+        .unwrap();
+        assert_eq!(
+            layer_pixels(&masks).map(|p| p.spans::<u32>().collect::<Vec<_>>()),
+            Some(expected.spans::<u32>().collect())
+        );
     }
 
     #[test]
@@ -633,10 +614,7 @@ mod tests {
     }
 
     fn mask_with_rect(x: u32, y: u32) -> MaskImage {
-        use crate::{History, MaskDefaultActions, PixelAreaStack};
-        let mut masks = MaskImage::new([100, 100], PixelAreaStack::default(), History::default());
-        masks.add(rect_ranges(x, y, nz(5), nz(5)));
-        masks
+        mask(rect_ranges(x, y, nz(5), nz(5)))
     }
 
     /// Rect-select the 5x5 block placed by [`mask_with_rect`]: the whole
@@ -662,10 +640,6 @@ mod tests {
         }));
         tool.update_gesture_frame(to, false);
         tool.settle();
-    }
-
-    fn layer_pixels(masks: &MaskImage) -> Option<SortedRanges<u32>> {
-        masks.subgroups_stack().get(0).map(|a| a.pixels.clone())
     }
 
     #[test]
@@ -726,10 +700,7 @@ mod tests {
     }
 
     fn mask_with_two_clusters() -> MaskImage {
-        use crate::{History, MaskDefaultActions, PixelAreaStack};
-        let mut masks = MaskImage::new([100, 100], PixelAreaStack::default(), History::default());
-        masks.add(ranges_from_spans(vec![Span::new(0..2, 0u32), Span::new(5..7, 3u32)]).unwrap());
-        masks
+        mask(ranges_from_spans(vec![Span::new(0..2, 0u32), Span::new(5..7, 3u32)]).unwrap())
     }
 
     fn click(tool: &mut DragTool, masks: &mut MaskImage, x: f32, y: f32, additive: bool) {
@@ -741,12 +712,13 @@ mod tests {
         let mut masks = mask_with_two_clusters();
         let mut tool = DragTool::default();
         click(&mut tool, &mut masks, 0.0, 0.0, false);
-        assert_eq!(tool.selection.as_ref().unwrap().layer_count_for_test(), 1);
+        assert!(tool.covers_on_layer(0, 0, 0));
         click(&mut tool, &mut masks, 6.0, 3.0, true);
         let sel = tool.selection.as_ref().unwrap();
-        // Same layer unions into a single entry (like rect-select).
-        assert_eq!(sel.layer_count_for_test(), 1);
-        assert_eq!(sel.original_of_for_test(0).unwrap().len(), 2);
+        // Same layer unions into a single entry (like rect-select): both
+        // clusters are covered by the one selection.
+        assert!(sel.covers_on_layer(0, 0, 0));
+        assert!(sel.covers_on_layer(0, 6, 3));
         // Frame expanded to contain both clusters.
         assert!(sel.frame().half.x >= 3.5);
     }
@@ -763,24 +735,22 @@ mod tests {
         click(&mut tool, &mut masks, 1.0, 0.0, true);
         click(&mut tool, &mut masks, 50.0, 50.0, true);
         let sel = tool.selection.as_ref().unwrap();
-        assert_eq!(sel.layer_count_for_test(), 1);
+        assert!(sel.covers_on_layer(0, 0, 0));
         assert_eq!(masks.last_history_action(), tip_before);
     }
 
     #[test]
     fn shift_click_adds_other_layer() {
-        use crate::{History, MaskDefaultActions, PixelAreaStack};
-        let mut masks = MaskImage::new([100, 100], PixelAreaStack::default(), History::default());
-        masks.add(rect_ranges(0, 0, nz(2), nz(2)));
+        let mut masks = mask(rect_ranges(0, 0, nz(2), nz(2)));
         masks.add(rect_ranges(50, 50, nz(2), nz(2)));
         let mut tool = DragTool::default();
         click(&mut tool, &mut masks, 0.0, 0.0, false);
         click(&mut tool, &mut masks, 51.0, 50.0, true);
         let sel = tool.selection.as_ref().unwrap();
-        assert_eq!(sel.layer_count_for_test(), 2);
-        let mut layers: Vec<usize> = sel.layer_ids_for_test();
-        layers.sort_unstable();
-        assert_eq!(layers, vec![0, 1]);
+        assert!(sel.covers_on_layer(0, 0, 0));
+        assert!(sel.covers_on_layer(1, 51, 50));
+        // Layer 2 stays unselected.
+        assert!(!sel.covers_on_layer(2, 0, 50));
     }
 
     #[test]
@@ -797,7 +767,7 @@ mod tests {
         assert!(tool.selection.is_none());
         click(&mut tool, &mut masks, 0.0, 0.0, false);
         click(&mut tool, &mut masks, 51.0, 0.0, true);
-        assert_eq!(tool.selection.as_ref().unwrap().layer_count_for_test(), 1);
+        assert!(tool.covers_on_layer(0, 0, 0));
     }
 
     #[test]
@@ -805,30 +775,28 @@ mod tests {
         let mut masks = mask_with_two_clusters();
         let mut tool = DragTool::default();
         click(&mut tool, &mut masks, 0.0, 0.0, false);
-        // Transform + commit: entry original stays pristine, committed moves.
+        // Transform + commit.
         drag_move(&mut tool, Point2::new(1.0, 0.0), Point2::new(6.0, 0.0));
         tool.commit(&mut masks, img_roi());
         // Shift-add bakes committed into original and resets the matrix,
-        // without touching history.
+        // without touching history. (Snapshot semantics asserted directly in
+        // the `logic` unit tests.)
         let tip_before = masks.last_history_action();
         click(&mut tool, &mut masks, 6.0, 3.0, true);
         let sel = tool.selection.as_ref().unwrap();
         assert_eq!(masks.last_history_action(), tip_before);
-        assert_eq!(sel.total_for_test(), Matrix3::identity());
-        assert_eq!(sel.layer_count_for_test(), 1);
-        // Rebaked original is the union of the placed pixels (moved cluster A)
-        // and the newly added cluster B.
-        let moved_a = transform_layer(
-            &ranges_from_spans(vec![Span::new(0..2, 0u32)]).unwrap(),
-            &Matrix3::new_translation(&Vector2::new(5.0, 0.0)),
-            img_roi(),
+        assert_eq!(sel.snapshot_transform().1, Matrix3::identity());
+        // The next commit moves placed pixels and new cluster uniformly:
+        // both travel by the same delta, nothing is left behind.
+        drag_move(&mut tool, Point2::new(6.0, 3.0), Point2::new(16.0, 13.0));
+        tool.commit(&mut masks, img_roi());
+        let expected = SortedRanges::<u32>::try_from_span_iter(
+            rect_ranges(15, 10, nz(2), nz(1))
+                .spans::<u32>()
+                .union(rect_ranges(15, 13, nz(2), nz(1)).spans()),
         )
         .unwrap();
-        let cluster_b = ranges_from_spans(vec![Span::new(5..7, 3u32)]).unwrap();
-        let combined = moved_a.spans::<u32>().union(cluster_b.spans());
-        let expected = SortedRanges::try_from_span_iter(combined).unwrap();
-        assert_eq!(sel.original_of_for_test(0), Some(expected.clone()));
-        assert_eq!(sel.committed_of_for_test(0), Some(expected));
+        assert_eq!(layer_pixels(&masks), Some(expected));
     }
 
     #[test]
@@ -839,18 +807,19 @@ mod tests {
         let a = RectSelectionResult::new(0, 0, 3, 1, w, w).unwrap();
         tool.select_rect(&masks, &a, false);
         let sel = tool.selection.as_ref().unwrap();
-        assert_eq!(sel.layer_count_for_test(), 1);
+        assert!(sel.covers_on_layer(0, 0, 0));
+        assert!(!sel.covers_on_layer(0, 6, 3));
         // Frame hugs the contained cluster (0..2, 0), not the marquee.
         assert_eq!(sel.frame().center, Point2::new(1.0, 0.5));
         assert_eq!(sel.frame().half, Vector2::new(1.0, 0.5));
-        // Shift-rect over the second cluster unions into the same entry.
+        // Shift-rect over the second cluster unions: the frame hugs the
+        // combined content (0..7, 0..4).
         let b = RectSelectionResult::new(4, 2, 8, 4, w, w).unwrap();
         tool.select_rect(&masks, &b, true);
         let sel = tool.selection.as_ref().unwrap();
-        assert_eq!(sel.layer_count_for_test(), 1);
-        let bounds = sel.first_original_bounds_for_test();
-        assert_eq!((bounds.x.start, bounds.y.start), (0, 0));
-        assert_eq!((bounds.x.end, bounds.y.end), (7, 4));
+        assert!(sel.covers_on_layer(0, 6, 3));
+        assert_eq!(sel.frame().center, Point2::new(3.5, 2.0));
+        assert_eq!(sel.frame().half, Vector2::new(3.5, 2.0));
     }
 
     #[test]
@@ -863,17 +832,9 @@ mod tests {
         let mut tool = DragTool::default();
         click(&mut tool, &mut masks, 0.0, 0.0, false);
         click(&mut tool, &mut masks, 6.0, 3.0, true);
-        let union_original = tool
-            .selection
-            .as_ref()
-            .unwrap()
-            .first_original_for_test()
-            .unwrap();
-        assert_eq!(union_original.len(), 2);
-        let (frame, _) = {
-            let sel = tool.selection.as_ref().unwrap();
-            sel.snapshot_transform()
-        };
+        // The selection content is exactly the union of the two clusters.
+        let union = ranges_from_spans(vec![Span::new(0..2, 0u32), Span::new(5..7, 3u32)]).unwrap();
+        let (frame, _) = tool.selection.as_ref().unwrap().snapshot_transform();
         let east = frame.point(Vector2::new(frame.half.x, 0.0));
         drag_resize(
             &mut tool,
@@ -882,14 +843,15 @@ mod tests {
             Point2::new(east.x + frame.half.x, east.y),
             false,
         );
-        let total = tool.selection.as_ref().unwrap().total_for_test();
-        let expected = transform_layer(&union_original, &total, img_roi()).unwrap();
+        let total = tool.selection.as_ref().unwrap().snapshot_transform().1;
+        let expected = transform_layer(&union, &total, img_roi()).unwrap();
         tool.commit(&mut masks, img_roi());
         assert_eq!(layer_pixels(&masks), Some(expected));
-        // Both areas survived the resize (no subtraction of the old area).
+        // Both areas survived the resize (no subtraction of the old area),
+        // and the selection stays alive for further gestures.
         let pixels = layer_pixels(&masks).unwrap();
         assert!(pixels.spans::<u32>().any(|s| s.y == 0));
-        assert_eq!(tool.selection.as_ref().unwrap().layer_count_for_test(), 1);
+        assert!(tool.selection.is_some());
     }
 
     /// Simulate a Resize gesture from `from` to `to` through the real update
@@ -918,9 +880,7 @@ mod tests {
     }
 
     fn mask_with_three_layers() -> MaskImage {
-        use crate::{History, MaskDefaultActions, PixelAreaStack};
-        let mut masks = MaskImage::new([100, 100], PixelAreaStack::default(), History::default());
-        masks.add(rect_ranges(0, 0, nz(2), nz(2)));
+        let mut masks = mask(rect_ranges(0, 0, nz(2), nz(2)));
         masks.add(rect_ranges(50, 0, nz(2), nz(2)));
         masks.add(rect_ranges(0, 50, nz(2), nz(2)));
         masks
@@ -932,21 +892,16 @@ mod tests {
         let mut tool = DragTool::default();
         tool.select_layers(&masks, 0..2);
         let sel = tool.selection.as_ref().unwrap();
-        assert_eq!(sel.layer_count_for_test(), 2);
-        assert_eq!(
-            sel.original_of_for_test(0),
-            Some(rect_ranges(0, 0, nz(2), nz(2)))
-        );
-        assert_eq!(
-            sel.original_of_for_test(1),
-            Some(rect_ranges(50, 0, nz(2), nz(2)))
-        );
-        assert_eq!(sel.total_for_test(), Matrix3::identity());
+        // Both matched layers selected with their full pixels, layer 2 not.
+        assert!(sel.covers_on_layer(0, 0, 0) && sel.covers_on_layer(0, 1, 1));
+        assert!(sel.covers_on_layer(1, 50, 0) && sel.covers_on_layer(1, 51, 1));
+        assert!(!sel.covers_on_layer(2, 0, 50));
+        assert_eq!(sel.snapshot_transform().1, Matrix3::identity());
         // Frame tightly covers both layers, nothing else.
         assert_eq!(sel.frame().center, Point2::new(26.0, 1.0));
         assert_eq!(sel.frame().half, Vector2::new(26.0, 1.0));
         // Staleness tip armed against the current history.
-        assert_eq!(sel.tip_for_test(), masks.last_history_action());
+        assert!(!sel.is_stale(masks.last_history_action()));
     }
 
     #[test]
@@ -955,11 +910,9 @@ mod tests {
         let mut tool = DragTool::default();
         tool.select_layers(&masks, 2);
         let sel = tool.selection.as_ref().unwrap();
-        assert_eq!(sel.layer_count_for_test(), 1);
-        assert_eq!(
-            sel.original_of_for_test(2),
-            Some(rect_ranges(0, 50, nz(2), nz(2)))
-        );
+        assert!(sel.covers_on_layer(2, 0, 50) && sel.covers_on_layer(2, 1, 51));
+        // Only layer 2: the others stay unselected.
+        assert!(!sel.covers_on_layer(0, 0, 0));
     }
 
     #[test]
@@ -977,11 +930,15 @@ mod tests {
         let masks = mask_with_three_layers();
         let mut tool = DragTool::default();
         tool.select_layers(&masks, ..);
-        assert_eq!(tool.selection.as_ref().unwrap().layer_count_for_test(), 3);
+        let sel = tool.selection.as_ref().unwrap();
+        assert!(sel.covers_on_layer(0, 0, 0));
+        assert!(sel.covers_on_layer(1, 50, 0));
+        assert!(sel.covers_on_layer(2, 0, 50));
         tool.select_layers(&masks, 1..2);
         let sel = tool.selection.as_ref().unwrap();
-        assert_eq!(sel.layer_count_for_test(), 1);
-        assert!(sel.has_layer_for_test(1));
+        assert!(sel.covers_on_layer(1, 50, 0));
+        assert!(!sel.covers_on_layer(0, 0, 0));
+        assert!(!sel.covers_on_layer(2, 0, 50));
     }
 
     #[test]
@@ -997,28 +954,12 @@ mod tests {
     }
 
     fn mask_blocks() -> MaskImage {
-        use crate::{History, MaskDefaultActions, PixelAreaStack};
-        let mut masks = MaskImage::new([100, 100], PixelAreaStack::default(), History::default());
         // 10x5 selection block at (10,10), 10x5 outsider block at (40,30).
-        let mut spans = Vec::new();
-        for y in 10..15 {
-            spans.push(Span::new(10..20, y));
-        }
-        for y in 30..35 {
-            spans.push(Span::new(40..50, y));
-        }
-        masks.add(ranges_from_spans(spans).unwrap());
-        masks
-    }
-
-    fn outsider_block_ok(masks: &MaskImage) -> bool {
-        layer_pixels(masks).is_some_and(|p| {
-            let rows: Vec<Span<u32>> = p
-                .spans::<u32>()
-                .filter(|s| (30..35).contains(&s.y))
-                .collect();
-            rows.len() == 5 && rows.iter().all(|s| s.x.start <= 40 && 50 <= s.x.end)
-        })
+        let spans = (10..15)
+            .map(|y| Span::new(10..20, y))
+            .chain((30..35).map(|y| Span::new(40..50, y)))
+            .collect();
+        mask(ranges_from_spans(spans).unwrap())
     }
 
     /// Click-selected 10x5 block on a layer that also holds a disjoint

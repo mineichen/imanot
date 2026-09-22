@@ -1,4 +1,4 @@
-use std::num::{NonZeroU16, NonZeroU32};
+use std::num::NonZeroU16;
 
 use imask::{ImageDimension, SortedRanges, Span};
 

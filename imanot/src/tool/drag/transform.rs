@@ -75,36 +75,11 @@ pub(crate) fn clamp_pixel(pointer: Pos2, img_w: usize, img_h: usize) -> (u32, u3
 #[cfg(test)]
 mod tests {
     use super::super::frame::{rotate_about, scale_about_frame};
+    use super::super::test_support::*;
     use super::*;
-    use std::num::NonZeroU32;
+    use imask::Span;
 
-    use imask::{Span, SpanBoundsBuilder, WithRoi};
     use nalgebra::{Point2, Vector2};
-
-    fn nz(n: u32) -> NonZeroU32 {
-        NonZeroU32::new(n).unwrap()
-    }
-
-    fn img_rect() -> Roi<u32> {
-        Roi::from_dimensions(nz(100), nz(100))
-    }
-
-    fn rect_ranges(x: u32, y: u32, w: NonZeroU32, h: NonZeroU32) -> SortedRanges<u32> {
-        SortedRanges::try_from_span_iter(Roi::new(x..x + w.get(), y..y + h.get()).into_spans())
-            .unwrap()
-    }
-
-    /// Test-only `Vec` adapter: `Vec` is not `ImageDimension`, so tight
-    /// bounds are tracked natively via `SpanBoundsBuilder` first.
-    fn ranges_from_spans(spans: Vec<Span<u32>>) -> Option<SortedRanges<u32>> {
-        let tight = spans
-            .iter()
-            .copied()
-            .collect::<SpanBoundsBuilder<u32>>()
-            .build()
-            .ok()?;
-        SortedRanges::try_from_span_iter(WithRoi::new(spans.into_iter(), tight)).ok()
-    }
 
     fn disjoint_rects() -> SortedRanges<u32> {
         ranges_from_spans(vec![Span::new(0..2, 0u32), Span::new(5..7, 3u32)]).unwrap()
@@ -114,14 +89,14 @@ mod tests {
     fn transform_identity_and_translation() {
         let original = rect_ranges(10, 10, nz(5), nz(5));
         assert_eq!(
-            transform_layer(&original, &Matrix3::identity(), img_rect()),
+            transform_layer(&original, &Matrix3::identity(), img_roi()),
             Some(original.clone())
         );
         assert_eq!(
             transform_layer(
                 &original,
                 &Matrix3::new_translation(&Vector2::new(3.0, -2.0)),
-                img_rect()
+                img_roi()
             ),
             Some(rect_ranges(13, 8, nz(5), nz(5)))
         );
@@ -136,14 +111,14 @@ mod tests {
             transform_layer(
                 &original,
                 &Matrix3::new_translation(&Vector2::new(-50.0, 0.0)),
-                img_rect()
+                img_roi()
             )
             .is_none()
         );
         let clipped = transform_layer(
             &rect_ranges(95, 95, nz(4), nz(4)),
             &Matrix3::new_translation(&Vector2::new(3.0, 3.0)),
-            img_rect(),
+            img_roi(),
         )
         .unwrap();
         let bounds = clipped.roi();
@@ -158,13 +133,13 @@ mod tests {
         // equal a single composed transform of the original.
         let original = rect_ranges(40, 40, nz(10), nz(10));
         let shift = Matrix3::new_translation(&Vector2::new(5.0, 0.0));
-        let after_move = transform_layer(&original, &shift, img_rect()).unwrap();
+        let after_move = transform_layer(&original, &shift, img_roi()).unwrap();
         let total = rotate_about(Point2::new(50.0, 45.0), std::f64::consts::FRAC_PI_2) * shift;
-        let from_original = transform_layer(&original, &total, img_rect()).unwrap();
+        let from_original = transform_layer(&original, &total, img_roi()).unwrap();
         // Chaining (rotate the already-rasterized move result) must not be
         // what the tool commits; it must equal the direct transform.
         let delta = rotate_about(Point2::new(50.0, 45.0), std::f64::consts::FRAC_PI_2);
-        let chained = transform_layer(&after_move, &delta, img_rect()).unwrap();
+        let chained = transform_layer(&after_move, &delta, img_roi()).unwrap();
         assert_eq!(from_original, chained);
     }
 
@@ -174,7 +149,7 @@ mod tests {
         // Uses the production `rotate_about` helper, not a test-only matrix.
         let original = rect_ranges(40, 40, nz(10), nz(20));
         let m = rotate_about(Point2::new(45.0, 50.0), std::f64::consts::FRAC_PI_2);
-        let out = transform_layer(&original, &m, img_rect()).unwrap();
+        let out = transform_layer(&original, &m, img_roi()).unwrap();
         let bounds = out.roi();
         assert_eq!(bounds.width().get(), 20);
         assert_eq!(bounds.height().get(), 10);
@@ -185,7 +160,7 @@ mod tests {
         // Horizontal mirror about the west edge (x=10) of a 5px rect.
         let original = rect_ranges(10, 10, nz(5), nz(5));
         let m = scale_about_frame(Point2::new(10.0, 12.5), 0.0, Vector2::new(-1.0, 1.0));
-        let out = transform_layer(&original, &m, img_rect()).unwrap();
+        let out = transform_layer(&original, &m, img_roi()).unwrap();
         let bounds = out.roi();
         assert_eq!(bounds.width().get(), 5);
         assert_eq!(bounds.height().get(), 5);

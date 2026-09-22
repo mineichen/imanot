@@ -230,75 +230,6 @@ impl ActiveSelectionLogic {
             }),
         );
     }
-
-    #[cfg(test)]
-    pub(crate) fn total_ref(&self) -> &Matrix3<f64> {
-        &self.total
-    }
-
-    #[cfg(test)]
-    pub(crate) fn tip_ref(&self) -> &Option<HistoryAction> {
-        &self.tip
-    }
-
-    #[cfg(test)]
-    pub(crate) fn layer_count(&self) -> usize {
-        self.layers.len()
-    }
-
-    #[cfg(test)]
-    pub(crate) fn has_layer(&self, layer: usize) -> bool {
-        self.layers.contains_key(&layer)
-    }
-
-    #[cfg(test)]
-    pub(crate) fn layer_ids(&self) -> Vec<usize> {
-        self.layers.keys().copied().collect()
-    }
-
-    #[cfg(test)]
-    pub(crate) fn original_of(&self, layer: usize) -> Option<&SortedRanges<u32>> {
-        self.layers.get(&layer).map(|l| &l.original)
-    }
-
-    #[cfg(test)]
-    pub(crate) fn committed_of(&self, layer: usize) -> Option<&SortedRanges<u32>> {
-        self.layers.get(&layer).map(|l| &l.committed)
-    }
-
-    #[cfg(test)]
-    pub(crate) fn first_original_cloned(&self) -> Option<SortedRanges<u32>> {
-        self.layers.values().next().map(|l| l.original.clone())
-    }
-
-    #[cfg(test)]
-    pub(crate) fn first_committed_cloned(&self) -> Option<SortedRanges<u32>> {
-        self.layers.values().next().map(|l| l.committed.clone())
-    }
-
-    /// Pixel area of the first layer's committed content (test helper with
-    /// selection-lifetime semantics: asserts an active single-entry selection).
-    #[cfg(test)]
-    pub(crate) fn first_committed_area(&self) -> usize {
-        self.layers
-            .values()
-            .next()
-            .expect("Has at least one layer")
-            .committed
-            .spans::<u32>()
-            .map(|s| (s.x.end - s.x.start) as usize)
-            .sum()
-    }
-
-    #[cfg(test)]
-    pub(crate) fn first_original_bounds(&self) -> Roi<u32> {
-        self.layers
-            .values()
-            .next()
-            .expect("Has at least one layer")
-            .original
-            .roi()
-    }
 }
 
 fn add_history_actions(
@@ -318,35 +249,16 @@ fn add_history_actions(
 
 #[cfg(test)]
 mod tests {
-    use std::num::NonZeroU32;
+    use imask::ImaskSet;
 
     use nalgebra::{Point2, Vector2};
 
+    use super::super::super::test_support::*;
     use super::*;
-    use crate::{History, MaskDefaultActions, PixelAreaStack};
-
-    fn nz(n: u32) -> NonZeroU32 {
-        NonZeroU32::new(n).unwrap()
-    }
-
-    fn img_roi() -> Roi<u32> {
-        Roi::from_dimensions(nz(100), nz(100))
-    }
-
-    fn rect_ranges(x: u32, y: u32, w: NonZeroU32, h: NonZeroU32) -> SortedRanges<u32> {
-        SortedRanges::try_from_span_iter(Roi::new(x..x + w.get(), y..y + h.get()).into_spans())
-            .unwrap()
-    }
 
     fn mask_with_rect(x: u32, y: u32) -> (MaskImage, SortedRanges<u32>) {
-        let mut masks = MaskImage::new([100, 100], PixelAreaStack::default(), History::default());
         let original = rect_ranges(x, y, nz(5), nz(5));
-        masks.add(original.clone());
-        (masks, original)
-    }
-
-    fn layer_pixels(masks: &MaskImage) -> Option<SortedRanges<u32>> {
-        masks.subgroups_stack().get(0).map(|a| a.pixels.clone())
+        (mask(original.clone()), original)
     }
 
     #[test]
@@ -396,5 +308,43 @@ mod tests {
         assert!(logic.commit(&mut masks, img_roi()).is_some());
         assert_eq!(layer_pixels(&masks), None);
         assert_ne!(masks.last_history_action(), tip_before);
+    }
+
+    #[test]
+    fn shift_add_rebases_snapshot_without_history_write() {
+        // Shift-add batch: the placed (committed) pixels are baked into a
+        // pristine `original` and `total` resets, so later gestures transform
+        // old and new content uniformly. No history write: the caller re-arms
+        // `tip` together with the rebase.
+        let (mut masks, original) = mask_with_rect(0, 0);
+        let mut logic =
+            ActiveSelectionLogic::fresh_single(0, original, None, masks.last_history_action());
+        // Transform + commit: `original` stays pristine, `committed` moves.
+        let (frame, total) = logic.snapshot_transform();
+        let delta = Vector2::new(5.0, 0.0);
+        logic.set_transform(
+            Frame {
+                center: frame.center + delta,
+                ..frame
+            },
+            total * Matrix3::new_translation(&delta),
+        );
+        let mut logic = logic.commit(&mut masks, img_roi()).unwrap();
+        let added = rect_ranges(5, 3, nz(2), nz(1));
+        logic.merge_layers(
+            std::iter::once((0, added, None)),
+            masks.last_history_action(),
+        );
+        // Rebase: the placed content plus the added cluster form the new
+        // pristine original; `total` is back to identity, `tip` re-armed.
+        let entry = &logic.layers[&0];
+        let placed = rect_ranges(5, 0, nz(5), nz(1));
+        let union = SortedRanges::<u32>::try_from_span_iter(
+            placed.spans::<u32>().union(entry.committed.spans()),
+        )
+        .unwrap();
+        assert_eq!(entry.original, union);
+        assert_eq!(logic.total, Matrix3::identity());
+        assert_eq!(logic.tip, masks.last_history_action());
     }
 }
