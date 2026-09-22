@@ -224,3 +224,91 @@ impl ActiveSelection {
         self.logic.first_committed_area()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::num::NonZeroU32;
+
+    use imask::{ImaskSet, Span};
+    use nalgebra::{Matrix3, Vector2};
+
+    use super::super::frame::Frame;
+    use super::*;
+    use crate::{History, MaskDefaultActions, PixelAreaStack};
+
+    fn nz(n: u32) -> NonZeroU32 {
+        NonZeroU32::new(n).unwrap()
+    }
+
+    fn img_roi() -> Roi<u32> {
+        Roi::from_dimensions(nz(100), nz(100))
+    }
+
+    fn rect_ranges(x: u32, y: u32, w: NonZeroU32, h: NonZeroU32) -> SortedRanges<u32> {
+        SortedRanges::try_from_span_iter(Roi::new(x..x + w.get(), y..y + h.get()).into_spans())
+            .unwrap()
+    }
+
+    /// Layer with a 10x5 block at (10,10) plus a disjoint 10x5 outsider
+    /// block at (40,30).
+    fn mask_with_outsiders() -> (MaskImage, SortedRanges<u32>, SortedRanges<u32>) {
+        let mut masks = MaskImage::new([100, 100], PixelAreaStack::default(), History::default());
+        let block = rect_ranges(10, 10, nz(10), nz(5));
+        let outsiders = rect_ranges(40, 30, nz(10), nz(5));
+        let combined =
+            SortedRanges::try_from_span_iter(block.spans::<u32>().union(outsiders.spans()))
+                .unwrap();
+        masks.add(combined);
+        (masks, block, outsiders)
+    }
+
+    fn layer_pixels(masks: &MaskImage) -> Option<SortedRanges<u32>> {
+        masks.subgroups_stack().get(0).map(|a| a.pixels.clone())
+    }
+
+    fn outsider_block_ok(masks: &MaskImage) -> bool {
+        layer_pixels(masks).is_some_and(|p| {
+            let rows: Vec<Span<u32>> = p
+                .spans::<u32>()
+                .filter(|s| (30..35).contains(&s.y))
+                .collect();
+            rows.len() == 5 && rows.iter().all(|s| s.x.start <= 40 && 50 <= s.x.end)
+        })
+    }
+
+    #[test]
+    fn commit_keeps_preview_alive() {
+        // Dropping the selection at a new position must not re-rasterize:
+        // the placed pixels are exactly what the preview already shows.
+        let (mut masks, block, outsiders) = mask_with_outsiders();
+        let mut selection =
+            ActiveSelection::fresh_single(0, block, Some(outsiders), masks.last_history_action());
+        let ctx = egui::Context::default();
+        let screen =
+            egui::Rect::from_min_max(egui::Pos2::new(0.0, 0.0), egui::Pos2::new(100.0, 100.0));
+        let mut painter =
+            ImagePainter::new(ctx.layer_painter(egui::LayerId::background()), screen, 1.0);
+        selection.render_transform(&ctx, &mut painter, img_roi(), false);
+        assert!(selection.preview_visible());
+        // Advance frame and matrix together, as a finished Move gesture would.
+        let (frame, total) = selection.snapshot_transform();
+        let delta = Vector2::new(5.0, 0.0);
+        selection.set_transform(
+            Frame {
+                center: frame.center + delta,
+                ..frame
+            },
+            total * Matrix3::new_translation(&delta),
+        );
+        let selection = selection
+            .commit_transform(&mut masks, img_roi())
+            .expect("moved commit survives");
+        // Pixels landed, outsiders intact, and the preview survived the drop.
+        assert_eq!(
+            selection.first_committed_for_test(),
+            Some(rect_ranges(15, 10, nz(10), nz(5)))
+        );
+        assert!(outsider_block_ok(&masks));
+        assert!(selection.preview_visible());
+    }
+}

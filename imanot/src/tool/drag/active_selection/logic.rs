@@ -315,3 +315,86 @@ fn add_history_actions(
     });
     r
 }
+
+#[cfg(test)]
+mod tests {
+    use std::num::NonZeroU32;
+
+    use nalgebra::{Point2, Vector2};
+
+    use super::*;
+    use crate::{History, MaskDefaultActions, PixelAreaStack};
+
+    fn nz(n: u32) -> NonZeroU32 {
+        NonZeroU32::new(n).unwrap()
+    }
+
+    fn img_roi() -> Roi<u32> {
+        Roi::from_dimensions(nz(100), nz(100))
+    }
+
+    fn rect_ranges(x: u32, y: u32, w: NonZeroU32, h: NonZeroU32) -> SortedRanges<u32> {
+        SortedRanges::try_from_span_iter(Roi::new(x..x + w.get(), y..y + h.get()).into_spans())
+            .unwrap()
+    }
+
+    fn mask_with_rect(x: u32, y: u32) -> (MaskImage, SortedRanges<u32>) {
+        let mut masks = MaskImage::new([100, 100], PixelAreaStack::default(), History::default());
+        let original = rect_ranges(x, y, nz(5), nz(5));
+        masks.add(original.clone());
+        (masks, original)
+    }
+
+    fn layer_pixels(masks: &MaskImage) -> Option<SortedRanges<u32>> {
+        masks.subgroups_stack().get(0).map(|a| a.pixels.clone())
+    }
+
+    #[test]
+    fn commit_moves_content_and_frame() {
+        let (mut masks, original) = mask_with_rect(10, 10);
+        let mut logic =
+            ActiveSelectionLogic::fresh_single(0, original, None, masks.last_history_action());
+        // Advance frame and matrix together, as a finished Move gesture would.
+        let (frame, total) = logic.snapshot_transform();
+        let delta = Vector2::new(5.0, 0.0);
+        logic.set_transform(
+            Frame {
+                center: frame.center + delta,
+                ..frame
+            },
+            total * Matrix3::new_translation(&delta),
+        );
+        let logic = logic
+            .commit(&mut masks, img_roi())
+            .expect("moved commit survives");
+        assert_eq!(
+            layer_pixels(&masks),
+            Some(rect_ranges(15, 10, nz(5), nz(5)))
+        );
+        assert_eq!(logic.frame().center, Point2::new(17.5, 12.5));
+        assert_eq!(logic.frame().half, Vector2::new(2.5, 2.5));
+    }
+
+    #[test]
+    fn commit_offscreen_doesnt_drop_empty_selection() {
+        let (mut masks, original) = mask_with_rect(10, 10);
+        let mut logic =
+            ActiveSelectionLogic::fresh_single(0, original, None, masks.last_history_action());
+        // Move fully out of the image: pixels are cleared, but the commit
+        // still lands in history, so the logic survives (the tool drops its
+        // selection only when `commit` returns `None`).
+        let (frame, total) = logic.snapshot_transform();
+        let delta = Vector2::new(-50.0, 0.0);
+        logic.set_transform(
+            Frame {
+                center: frame.center + delta,
+                ..frame
+            },
+            total * Matrix3::new_translation(&delta),
+        );
+        let tip_before = masks.last_history_action();
+        assert!(logic.commit(&mut masks, img_roi()).is_some());
+        assert_eq!(layer_pixels(&masks), None);
+        assert_ne!(masks.last_history_action(), tip_before);
+    }
+}
