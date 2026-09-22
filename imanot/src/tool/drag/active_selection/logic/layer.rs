@@ -29,18 +29,18 @@ impl LayerSelection {
         }
     }
 
-    pub(super) fn update(&mut self, ranges: &SortedRanges<u32>) {
-        self.background = self
-            .background
-            .take()
-            .and_then(|bg| subtract_ranges(&bg, ranges.spans()));
-        if let (Some(original), Some(committed)) = (
-            union_ranges(&self.original, ranges),
-            union_ranges(&self.committed, ranges),
-        ) {
-            self.original = original;
-            self.committed = committed;
-        }
+    pub(super) fn update(mut self, ranges: &SortedRanges<u32>) -> Option<Self> {
+        union_ranges(&self.original, ranges)
+            .zip(union_ranges(&self.committed, ranges))
+            .map(|(original, committed)| {
+                self.background = self
+                    .background
+                    .take()
+                    .and_then(|bg| subtract_ranges(&bg, ranges.spans()));
+                self.original = original;
+                self.committed = committed;
+                self
+            })
     }
 
     /// Background pixels under the committed footprint, for re-adding in the
@@ -56,10 +56,7 @@ impl LayerSelection {
 /// Union of two range sets. Returns `None` only if both are empty (cannot
 /// happen for snapshot content, which is never empty). Builds straight from
 /// the union stream; `minbounds` guarantees tight bounds either way.
-pub(crate) fn union_ranges(
-    a: &SortedRanges<u32>,
-    b: &SortedRanges<u32>,
-) -> Option<SortedRanges<u32>> {
+fn union_ranges(a: &SortedRanges<u32>, b: &SortedRanges<u32>) -> Option<SortedRanges<u32>> {
     SortedRanges::try_from_span_iter_minbounds(a.spans::<u32>().union(b.spans())).ok()
 }
 

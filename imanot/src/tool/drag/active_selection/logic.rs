@@ -5,13 +5,14 @@ use imask::{ImageDimension, Roi, SortedRanges, Span};
 use nalgebra::Matrix3;
 
 use super::super::frame::{Frame, union_bounds};
-use super::super::transform::{push_add, push_clear, transform_layer};
+use super::super::transform::transform_layer;
+use crate::tool::drag::transform::{build_add_untracked, build_clear_untracked};
 use crate::{HistoryAction, MaskImage};
 
 mod layer;
 
 use layer::LayerSelection;
-pub(crate) use layer::{subtract_ranges, subtract_ranges_collect_subtrahend, union_ranges};
+pub(crate) use layer::{subtract_ranges, subtract_ranges_collect_subtrahend};
 
 /// Pure selection logic: snapshot content, accumulated transform and frame.
 /// GPU-free on purpose, so unit tests stay context-free. The live preview
@@ -94,11 +95,14 @@ impl ActiveSelectionLogic {
     ) {
         self.frame.expand_to_cover(ranges.roi());
         match self.layers.entry(layer_id) {
-            Entry::Occupied(mut x) => {
-                x.get_mut().update(&ranges);
-            }
             Entry::Vacant(x) => {
                 x.insert(LayerSelection::fresh(ranges, background));
+            }
+            Entry::Occupied(x) => {
+                let r = x.remove();
+                if let Some(new_val) = r.update(&ranges) {
+                    self.layers.insert(layer_id, new_val);
+                }
             }
         }
     }
@@ -210,42 +214,44 @@ impl ActiveSelectionLogic {
         if should_abort {
             return Some(self);
         }
-        let mut first = true;
-        let mut clear = true;
-        for (&layer, ls, new) in computed {
+
+        let actions = computed.into_iter().flat_map(|(&layer, ls, new)| {
             let restore = ls
                 .restore()
                 .and_then(|i| SortedRanges::try_from_span_iter(i).ok());
-            push_clear(masks, layer, ls.committed.clone(), first);
-            first = false;
-            if let Some(new) = new {
-                push_add(masks, layer, new.clone(), false);
-                clear = false;
-                ls.committed = new;
-                if let Some(restore) = restore {
-                    push_add(masks, layer, restore, false);
-                }
-            }
-        }
+            let clear = build_clear_untracked(layer, ls.committed.clone());
+            let add = new
+                .map(move |new| {
+                    let add = build_add_untracked(layer, new.clone());
+                    ls.committed = new;
+                    std::iter::once(add).chain(restore.map(|r| build_add_untracked(layer, r)))
+                })
+                .into_iter()
+                .flatten();
+            std::iter::once(clear).chain(add)
+        });
+
+        let r = add_history_actions(masks, actions);
+
         self.tip = masks.last_history_action();
-        (!clear).then_some(self)
+        r.then_some(self)
     }
 
     /// Delete path: Clear every layer's placed ranges (re-adding absorbed
     /// background in the same hook), then drain the layers. First action is
     /// `tracked` so one ctrl-Z reverts the whole delete.
-    pub(crate) fn delete_all(&mut self, masks: &mut MaskImage) {
-        let mut first = true;
-        for (layer, ls) in std::mem::take(&mut self.layers).into_iter() {
-            let restore = ls
-                .restore()
-                .and_then(|i| SortedRanges::try_from_span_iter(i).ok());
-            push_clear(masks, layer, ls.committed, first);
-            first = false;
-            if let Some(restore) = restore {
-                push_add(masks, layer, restore, false);
-            }
-        }
+    pub(crate) fn delete_all(self, masks: &mut MaskImage) {
+        add_history_actions(
+            masks,
+            self.layers.into_iter().flat_map(|(layer, ls)| {
+                let restore = ls
+                    .restore()
+                    .and_then(|i| SortedRanges::try_from_span_iter(i).ok());
+                let clear = build_clear_untracked(layer, ls.committed);
+                let add = restore.map(|r| build_add_untracked(layer, r));
+                std::iter::once(clear).chain(add)
+            }),
+        );
     }
 
     #[cfg(test)]
@@ -316,4 +322,19 @@ impl ActiveSelectionLogic {
             .original
             .roi()
     }
+}
+
+fn add_history_actions(
+    masks: &mut MaskImage,
+    mut actions: impl Iterator<Item = HistoryAction>,
+) -> bool {
+    let r = actions.next().map_or(false, |mut first| {
+        first.tracked = true;
+        masks.add_history_action(first);
+        for action in actions {
+            masks.add_history_action(action);
+        }
+        true
+    });
+    r
 }

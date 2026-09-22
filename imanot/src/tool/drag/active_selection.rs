@@ -144,7 +144,7 @@ impl ActiveSelection {
     }
 
     /// See [`ActiveSelectionLogic::delete_all`].
-    pub(crate) fn delete_all(&mut self, masks: &mut MaskImage) {
+    pub(crate) fn delete_all(self, masks: &mut MaskImage) {
         self.logic.delete_all(masks);
     }
 

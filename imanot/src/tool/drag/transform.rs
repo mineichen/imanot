@@ -21,33 +21,20 @@ pub(crate) fn transform_layer(
     SortedRanges::try_from_span_iter_minbounds(clipped).ok()
 }
 
-/// Push an Add of `ranges` on `layer` into the current undo group.
-pub(crate) fn push_add(
-    masks: &mut MaskImage,
-    layer: usize,
-    pixel_area: SortedRanges<u32>,
-    tracked: bool,
-) {
-    masks.add_history_action(HistoryAction {
+pub(crate) fn build_add_untracked(layer: usize, pixel_area: SortedRanges<u32>) -> HistoryAction {
+    HistoryAction {
         kind: HistoryActionKind::Add(HistoryActionAdd { pixel_area }),
         layer: AffectedLayer::Layer(layer),
-        tracked,
-    });
+        tracked: false,
+    }
 }
 
-/// Push a Clear of `ranges` on `layer` as (possibly) the tracked head of an
-/// undo group. Returns whether an action was pushed.
-pub(crate) fn push_clear(
-    masks: &mut MaskImage,
-    layer: usize,
-    ranges: SortedRanges<u32>,
-    tracked: bool,
-) {
-    masks.add_history_action(HistoryAction {
+pub(crate) fn build_clear_untracked(layer: usize, ranges: SortedRanges<u32>) -> HistoryAction {
+    HistoryAction {
         kind: HistoryActionKind::Clear(HistoryActionClear { ranges }),
         layer: AffectedLayer::Layer(layer),
-        tracked,
-    });
+        tracked: false,
+    }
 }
 
 /// Clip a transform result to the image rect via the imask `clip` combinator.
