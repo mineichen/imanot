@@ -1272,7 +1272,6 @@ dependencies = [
 [[package]]
 name = "imask"
 version = "0.0.1"
-source = "git+https://github.com/mineichen/imask.git#c25f2e9491de9bae829eacb98cb79d9ca8e44d5b"
 dependencies = [
  "futures-core",
  "futures-io",

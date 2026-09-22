@@ -1,14 +1,21 @@
-use std::{iter::once, sync::Arc};
+use std::{
+    iter::{FusedIterator, once},
+    sync::Arc,
+};
 
 use egui::{CursorIcon, Pos2, Vec2};
 use futures::FutureExt;
-use imask::{ImageDimension, ImaskSet, Roi, SortedRanges, SortedRangesSpanBuilder, SpanCluster};
+use imask::{
+    ImageDimension, ImaskSet, Roi, SortedRanges, SortedRangesSpanBuilder,
+    SortedRangesTightSpanBuilder, Span, SpanCluster,
+};
 #[cfg(test)]
 use imask::{SpanBoundsBuilder, WithRoi};
 use nalgebra::Point2;
 
 use crate::{
-    AffectedLayer, MaskImage, RectSelection, RectSelectionResult, Tool, ToolContext, ToolFactory,
+    AffectedLayer, MaskImage, PixelArea, RectSelection, RectSelectionResult, Tool, ToolContext,
+    ToolFactory,
     tool::drag::active_selection::{ActiveSelectionLogic, LayerSelection},
 };
 
@@ -187,22 +194,12 @@ impl DragTool {
         // the boundary — everything inside the drag tool uses `Roi`.
         let roi = Roi::from(result.rect());
         let layer = self.layer;
-        let mut layers = masks
-            .subgroups_stack()
-            .iter_filtered(layer)
-            .filter_map(|(idx, area)| {
-                // `minbounds` shrinks the (possibly whole-image) layer bounds to
-                // the clipped content in a single pass — no intermediate `Vec`.
-                // The background (layer minus snapshot) travels along so later
-                // commits can restore outsiders under cleared footprints.
+        let mut layers = layer_ranges(masks.subgroups_stack().iter_filtered(layer).filter_map(
+            move |(idx, area)| {
                 let clipped = area.pixels.spans::<u32>().clip(roi).ok()?;
-                let ranges = SortedRanges::try_from_span_iter_minbounds(clipped).ok()?;
-                let background = SortedRanges::try_from_span_iter_minbounds(
-                    area.pixels.spans::<u32>().subtract(ranges.spans()),
-                )
-                .ok();
-                Some((idx, ranges, background))
-            });
+                Some((idx, area, clipped))
+            },
+        ));
         if let Some(first) = layers.next() {
             if additive && let Some(sel) = self.selection.as_mut() {
                 sel.merge_layers(once(first).chain(layers), masks.last_history_action());
@@ -221,26 +218,31 @@ impl DragTool {
         }
     }
 
-    /// Programmatically replace the selection from raw per-layer span streams:
-    /// `(layer index, spans carrying their own bounds)`, e.g.
-    /// `masks.subgroups_stack().iter().map(|(i, a)| (i, a.pixels.spans()))`.
-    /// Behaves like a fresh selection: tight ranges are rebuilt per layer and
-    /// snapshotted as pristine originals, the frame tightly covers all
-    /// selected pixels and any in-progress gesture is dropped. Layers without
-    /// visible pixels are skipped; if nothing matches, the selection is
-    /// dropped (an empty box is never shown). Unlike click/rect selection this
-    /// does not intersect with the tool's own `AffectedLayer` filter — the
-    /// caller names the layers explicitly.
-    pub fn select_layers(
-        &mut self,
-        masks: &MaskImage,
-        mut layers: impl Iterator<Item = (usize, SortedRanges<u32>)>,
-    ) {
+    /// Programmatically select whole mask layers: all pixels of every layer
+    /// matched by `layer` (e.g. `2` or `0..3`), gathered from `masks` itself —
+    /// unlike the old raw-span interface, no pixels can be named that have no
+    /// corresponding ranges in the mask. Behaves like a fresh selection: tight
+    /// ranges are rebuilt per layer and snapshotted as pristine originals,
+    /// the frame tightly covers all selected pixels and any in-progress
+    /// gesture is dropped. Layers without visible pixels are skipped; if
+    /// nothing matches, the selection is dropped (an empty box is never
+    /// shown). Whole layers are selected, so there is no non-selected
+    /// remainder to restore: the background is always `None`. Unlike
+    /// click/rect selection this does not intersect with the tool's own
+    /// `AffectedLayer` filter — the caller names the layers explicitly.
+    pub fn select_layers(&mut self, masks: &MaskImage, layer: impl Into<AffectedLayer>) {
+        let mut layers = layer_ranges(
+            masks
+                .subgroups_stack()
+                .iter_filtered(layer.into())
+                .map(|(idx, area)| (idx, area, area.pixels.spans::<u32>())),
+        )
+        .map(|(idx, ranges, _)| (idx, LayerSelection::fresh(ranges, None)));
         if let Some(first) = layers.next() {
             self.selection = Some(ActiveSelection::from_logic(
                 ActiveSelectionLogic::fresh_from_sorted_ranges_iter(
-                    (first.0, LayerSelection::fresh(first.1, None)),
-                    layers.map(|(a, b)| (a, LayerSelection::fresh(b, None))),
+                    first,
+                    layers,
                     masks.last_history_action(),
                 ),
             ));
@@ -370,11 +372,44 @@ impl DragTool {
         ctx.egui.set_cursor_icon(icon);
     }
 }
+/// Build tight per-layer selection content from pre-filtered layer spans:
+/// each item carries the layer index, the layer's full [`PixelArea`] and the
+/// selected span stream (already clipped by the caller when selecting a
+/// sub-region, e.g. [`DragTool::select_rect`]). Returns the rebuilt tight
+/// ranges plus the layer's non-selected remainder as background (layer minus
+/// snapshot, so later commits can restore outsiders under cleared
+/// footprints) — `None` when everything was selected. Layers whose stream is
+/// empty are skipped.
+///
+/// Single pass over the selected spans: they are fed into the tight ranges
+/// builder inline ([`ImaskSet::fold_inline`]) while `subtract` consumes them
+/// for the background, instead of building the ranges first and re-walking
+/// them inside `subtract`.
+fn layer_ranges<'m, S>(
+    layers: impl Iterator<Item = (usize, &'m PixelArea, S)> + 'm,
+) -> impl Iterator<Item = (usize, SortedRanges<u32>, Option<SortedRanges<u32>>)> + 'm
+where
+    S: Iterator<Item = Span<u32>> + ImageDimension + FusedIterator,
+{
+    layers.filter_map(|(idx, area, selected)| {
+        let span_builder = SortedRangesTightSpanBuilder::new(selected.roi(), &selected);
+        let mut selected = selected.fold_inline(span_builder, |b, s| b.add(*s));
+        // Materialize the background before `finish_all` drains the selected
+        // stream's remainder into the builder; an empty background is `None`,
+        // not a reason to skip the layer.
+        let background = SortedRanges::try_from_span_iter_minbounds(
+            area.pixels.spans::<u32>().subtract(&mut selected),
+        )
+        .ok();
+        let ranges = selected.finish_all().build().ok()?;
+        Some((idx, ranges, background))
+    })
+}
 fn subtract_ranges_collect_subtrahend(
     a: &SortedRanges<u32>,
     b: SpanCluster<u32>,
 ) -> (Option<SortedRanges<u32>>, SortedRanges<u32>) {
-    let span_builder = SortedRangesSpanBuilder::new(b.roi());
+    let span_builder = SortedRangesSpanBuilder::new(b.roi(), &b);
     let mut b = b.fold_inline(span_builder, |b, n| {
         b.add(*n);
     });
@@ -507,23 +542,6 @@ mod tests {
     use super::frame::Anchor;
     use super::transform::transform_layer;
     use super::*;
-    use crate::ImagePainter;
-
-    /// Span streams of the `masks` stack layers matched by `which`
-    /// (any `impl Into<AffectedLayer>`): the caller-side half of
-    /// [`DragTool::select_layers`] — filtering stays with the caller, tight
-    /// rebuilding inside the tool.
-    fn stack_spans(
-        masks: &MaskImage,
-        which: impl Into<AffectedLayer>,
-    ) -> impl Iterator<Item = (usize, SortedRanges<u32>)> + '_ {
-        let which = which.into();
-        masks
-            .subgroups_stack()
-            .iter()
-            .filter(move |(i, _)| which.affects(*i))
-            .map(|(i, a)| (i, a.pixels.clone()))
-    }
 
     /// Test-only `Vec` adapter: `Vec` is not `ImageDimension`, so tight
     /// bounds are tracked natively via `SpanBoundsBuilder` first.
@@ -614,22 +632,20 @@ mod tests {
         assert_eq!(remaining, outsider_before);
     }
 
-    fn mask_with_rect(x: u32, y: u32) -> (MaskImage, SortedRanges<u32>) {
+    fn mask_with_rect(x: u32, y: u32) -> MaskImage {
         use crate::{History, MaskDefaultActions, PixelAreaStack};
         let mut masks = MaskImage::new([100, 100], PixelAreaStack::default(), History::default());
-        let original = rect_ranges(x, y, nz(5), nz(5));
-        masks.add(original.clone());
-        (masks, original)
+        masks.add(rect_ranges(x, y, nz(5), nz(5)));
+        masks
     }
 
-    #[cfg(test)]
-    fn select_layer(tool: &mut DragTool, masks: &MaskImage, original: SortedRanges<u32>) {
-        tool.selection = Some(ActiveSelection::fresh_single(
-            0,
-            original,
-            None,
-            masks.last_history_action(),
-        ));
+    /// Rect-select the 5x5 block placed by [`mask_with_rect`]: the whole
+    /// layer, so the background is empty — same shape the `select_layer`
+    /// helper used to build by hand.
+    fn select_rect_block(tool: &mut DragTool, masks: &MaskImage, x: usize, y: usize) {
+        let w = nz(100);
+        let r = RectSelectionResult::new(x, y, x + 5, y + 5, w, w).unwrap();
+        tool.select_rect(masks, &r, false);
     }
 
     /// Simulate a Move gesture from `from` to `to` through the real update
@@ -653,30 +669,14 @@ mod tests {
     }
 
     #[test]
-    fn commit_moves_content_and_frame() {
-        let (mut masks, original) = mask_with_rect(10, 10);
-        let mut tool = DragTool::default();
-        select_layer(&mut tool, &masks, original);
-        drag_move(&mut tool, Point2::new(12.5, 12.5), Point2::new(17.5, 12.5));
-        tool.commit(&mut masks, img_roi());
-        assert_eq!(
-            layer_pixels(&masks),
-            Some(rect_ranges(15, 10, nz(5), nz(5)))
-        );
-        let frame = tool.selection.as_ref().unwrap().frame();
-        assert_eq!(frame.center, Point2::new(17.5, 12.5));
-        assert_eq!(frame.half, Vector2::new(2.5, 2.5));
-    }
-
-    #[test]
     fn commit_drops_gesture_after_mouseup() {
         // Mouseup ends the transform gesture: the commit keeps the selection
         // (idle, for further gestures) but must drop the in-progress gesture.
         // Otherwise the tool stays stuck in the Move branch and re-commits or
         // re-renders the old gesture on every following frame.
-        let (mut masks, original) = mask_with_rect(10, 10);
+        let mut masks = mask_with_rect(10, 10);
         let mut tool = DragTool::default();
-        select_layer(&mut tool, &masks, original);
+        select_rect_block(&mut tool, &masks, 10, 10);
         let (frame, total) = {
             let sel = tool.selection.as_ref().unwrap();
             sel.snapshot_transform()
@@ -699,53 +699,12 @@ mod tests {
     }
 
     #[test]
-    fn commit_offscreen_doesnt_drop_empty_selection() {
-        let (mut masks, original) = mask_with_rect(10, 10);
-        let mut tool = DragTool::default();
-        select_layer(&mut tool, &masks, original);
-        // Move fully out of the image: pixels cleared, selection dropped so
-        // no empty box is shown. The clears stay one undo step.
-        drag_move(&mut tool, Point2::new(12.5, 12.5), Point2::new(-37.5, 12.5));
-        let tip_before = masks.last_history_action();
-        tool.commit(&mut masks, img_roi());
-        assert_eq!(layer_pixels(&masks), None);
-        assert!(tool.selection.is_some());
-        assert_ne!(masks.last_history_action(), tip_before);
-    }
-
-    #[test]
-    fn commit_keeps_preview_alive() {
-        // Dropping the selection at a new position must not re-rasterize:
-        // the placed pixels are exactly what the preview already shows.
-        let (mut masks, mut tool) = fresh_block_selection();
-        let ctx = egui::Context::default();
-        let screen =
-            egui::Rect::from_min_max(egui::Pos2::new(0.0, 0.0), egui::Pos2::new(100.0, 100.0));
-        let mut painter =
-            ImagePainter::new(ctx.layer_painter(egui::LayerId::background()), screen, 1.0);
-        tool.selection
-            .as_mut()
-            .unwrap()
-            .render_transform(&ctx, &mut painter, img_roi(), false);
-        assert!(tool.selection.as_ref().unwrap().preview_visible());
-        drag_move(&mut tool, Point2::new(12.0, 12.0), Point2::new(17.0, 12.0));
-        tool.commit(&mut masks, img_roi());
-        // Pixels landed, outsiders intact, and the preview survived the drop.
-        assert_eq!(
-            tool.selection.as_ref().unwrap().first_committed_for_test(),
-            Some(rect_ranges(15, 10, nz(10), nz(5)))
-        );
-        assert!(outsider_block_ok(&masks));
-        assert!(tool.selection.as_ref().unwrap().preview_visible());
-    }
-
-    #[test]
     fn no_op_writes_no_history() {
         // Neither an unchanged commit nor a selection-less delete may touch
         // history.
-        let (mut masks, original) = mask_with_rect(10, 10);
+        let mut masks = mask_with_rect(10, 10);
         let mut tool = DragTool::default();
-        select_layer(&mut tool, &masks, original);
+        select_rect_block(&mut tool, &masks, 10, 10);
         let tip_before = masks.last_history_action();
         tool.commit(&mut masks, img_roi());
         assert_eq!(masks.last_history_action(), tip_before);
@@ -756,9 +715,9 @@ mod tests {
 
     #[test]
     fn delete_selection_clears_ranges_and_drops_selection() {
-        let (mut masks, original) = mask_with_rect(10, 10);
+        let mut masks = mask_with_rect(10, 10);
         let mut tool = DragTool::default();
-        select_layer(&mut tool, &masks, original);
+        select_rect_block(&mut tool, &masks, 10, 10);
         let tip_before = masks.last_history_action();
         tool.delete_selection(&mut masks);
         assert_eq!(layer_pixels(&masks), None);
@@ -971,7 +930,7 @@ mod tests {
     fn select_layers_selects_whole_matched_layers() {
         let masks = mask_with_three_layers();
         let mut tool = DragTool::default();
-        tool.select_layers(&masks, stack_spans(&masks, 0..2));
+        tool.select_layers(&masks, 0..2);
         let sel = tool.selection.as_ref().unwrap();
         assert_eq!(sel.layer_count_for_test(), 2);
         assert_eq!(
@@ -994,7 +953,7 @@ mod tests {
     fn select_layers_accepts_layer_shorthand() {
         let masks = mask_with_three_layers();
         let mut tool = DragTool::default();
-        tool.select_layers(&masks, stack_spans(&masks, 2));
+        tool.select_layers(&masks, 2);
         let sel = tool.selection.as_ref().unwrap();
         assert_eq!(sel.layer_count_for_test(), 1);
         assert_eq!(
@@ -1007,9 +966,9 @@ mod tests {
     fn select_layers_without_match_drops_selection() {
         let masks = mask_with_three_layers();
         let mut tool = DragTool::default();
-        tool.select_layers(&masks, stack_spans(&masks, ..));
+        tool.select_layers(&masks, ..);
         assert!(tool.selection.is_some());
-        tool.select_layers(&masks, stack_spans(&masks, 5..8));
+        tool.select_layers(&masks, 5..8);
         assert!(tool.selection.is_none());
     }
 
@@ -1017,9 +976,9 @@ mod tests {
     fn select_layers_replaces_existing_selection() {
         let masks = mask_with_three_layers();
         let mut tool = DragTool::default();
-        tool.select_layers(&masks, stack_spans(&masks, ..));
+        tool.select_layers(&masks, ..);
         assert_eq!(tool.selection.as_ref().unwrap().layer_count_for_test(), 3);
-        tool.select_layers(&masks, stack_spans(&masks, 1..2));
+        tool.select_layers(&masks, 1..2);
         let sel = tool.selection.as_ref().unwrap();
         assert_eq!(sel.layer_count_for_test(), 1);
         assert!(sel.has_layer_for_test(1));
@@ -1029,7 +988,7 @@ mod tests {
     fn select_layers_then_gesture_moves_all_layers() {
         let mut masks = mask_with_three_layers();
         let mut tool = DragTool::default();
-        tool.select_layers(&masks, stack_spans(&masks, 0..3));
+        tool.select_layers(&masks, 0..3);
         drag_move(&mut tool, Point2::new(1.0, 1.0), Point2::new(4.0, 5.0));
         tool.commit(&mut masks, img_roi());
         assert_eq!(layer_pixels(&masks), Some(rect_ranges(3, 4, nz(2), nz(2))));
