@@ -351,7 +351,7 @@ impl DragTool {
     /// discarded — the mask itself is never touched during a gesture, so
     /// there is nothing to undo there.
     fn delete_selection(&mut self, masks: &mut MaskImage) {
-        if let Some(mut sel) = self.selection.take() {
+        if let Some(sel) = self.selection.take() {
             self.settle();
             sel.delete_all(masks);
         };
@@ -493,6 +493,11 @@ mod tests {
     use imask::ImageDimension;
     use nalgebra::{Matrix3, Vector2};
 
+    use super::frame::Anchor;
+    use super::transform::transform_layer;
+    use super::*;
+    use crate::ImagePainter;
+
     /// Span streams of the `masks` stack layers matched by `which`
     /// (any `impl Into<AffectedLayer>`): the caller-side half of
     /// [`DragTool::select_layers`] — filtering stays with the caller, tight
@@ -509,13 +514,6 @@ mod tests {
             .filter(move |(i, _)| which.affects(*i))
             .map(|(i, a)| (i, a.pixels.spans::<u32>()))
     }
-
-    use super::active_selection::logic::union_ranges;
-    use super::frame::Anchor;
-    use super::transform::transform_layer;
-    use crate::ImagePainter;
-
-    use super::*;
 
     /// Test-only `Vec` adapter: `Vec` is not `ImageDimension`, so tight
     /// bounds are tracked natively via `SpanBoundsBuilder` first.
@@ -690,7 +688,7 @@ mod tests {
     }
 
     #[test]
-    fn commit_offscreen_drops_empty_selection() {
+    fn commit_offscreen_doesnt_drop_empty_selection() {
         let (mut masks, original) = mask_with_rect(10, 10);
         let mut tool = DragTool::default();
         select_layer(&mut tool, &masks, original);
@@ -700,7 +698,7 @@ mod tests {
         let tip_before = masks.last_history_action();
         tool.commit(&mut masks, img_roi());
         assert_eq!(layer_pixels(&masks), None);
-        assert!(tool.selection.is_none());
+        assert!(tool.selection.is_some());
         assert_ne!(masks.last_history_action(), tip_before);
     }
 
@@ -857,7 +855,8 @@ mod tests {
         )
         .unwrap();
         let cluster_b = ranges_from_spans(vec![Span::new(5..7, 3u32)]).unwrap();
-        let expected = union_ranges(&moved_a, &cluster_b).unwrap();
+        let combined = moved_a.spans::<u32>().union(cluster_b.spans());
+        let expected = SortedRanges::try_from_span_iter(combined).unwrap();
         assert_eq!(sel.original_of_for_test(0), Some(expected.clone()));
         assert_eq!(sel.committed_of_for_test(0), Some(expected));
     }
