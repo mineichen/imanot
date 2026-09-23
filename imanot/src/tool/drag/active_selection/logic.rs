@@ -1,7 +1,9 @@
 use std::collections::BTreeMap;
 use std::collections::btree_map::Entry;
 
-use imask::{ImageDimension, Roi, SortedRanges};
+use imask::{
+    AffineTransformHeap, ImageDimension, ImaskSet, PipelineError, Roi, SortedRanges, Span, UnionAll,
+};
 use nalgebra::Matrix3;
 
 use super::super::frame::Frame;
@@ -165,10 +167,22 @@ impl ActiveSelectionLogic {
             .is_some_and(|l| l.committed.contains(x, y))
     }
 
-    /// Pristine originals for preview rasterization (read-only refs: the
-    /// snapshot content can only change via `merge_layer`/`rebase`/ctor).
-    pub(crate) fn originals(&self) -> impl Iterator<Item = &SortedRanges<u32>> {
-        self.layers.values().map(LayerSelection::original)
+    pub(super) fn transformed(
+        &self,
+        img_roi: Roi<u32>,
+    ) -> Result<impl Iterator<Item = Span<u32>> + ImageDimension, PipelineError> {
+        let matrix = self.total();
+        UnionAll::new(
+            self.layers
+                .values()
+                .map(LayerSelection::original)
+                .filter_map(|original| {
+                    AffineTransformHeap::new(original.spans::<u32>(), &matrix)
+                        .ok()?
+                        .clip(img_roi)
+                        .ok()
+                }),
+        )
     }
 
     /// Commit the current transform: Clear previously committed ranges, Add
