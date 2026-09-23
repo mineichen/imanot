@@ -60,9 +60,10 @@ impl LayerSelection {
     /// Background pixels under the committed footprint, for re-adding in the
     /// same hook as the Clear. `None` when nothing overlaps (the common
     /// case) — then commit stays a Clear + Add pair.
-    pub(super) fn restore(&self) -> Option<impl Iterator<Item = Span<u32>> + ImageDimension> {
+    pub(super) fn restore(&self) -> Option<SortedRanges<u32>> {
         let bg = self.background.as_ref()?;
-        bg.spans::<u32>().intersect(self.committed.spans()).ok()
+        let spans = bg.spans::<u32>().intersect(self.committed.spans()).ok()?;
+        SortedRanges::try_from_span_iter(spans).ok()
     }
 }
 

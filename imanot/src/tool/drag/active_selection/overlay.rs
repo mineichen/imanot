@@ -3,7 +3,7 @@ use nalgebra::{Point2, Vector2};
 
 use crate::ImagePainter;
 
-use super::frame::{Anchor, Frame};
+use super::super::frame::{Anchor, Frame};
 
 /// Size of resize anchors and the rotate handle in screen pixels.
 pub(crate) const ANCHOR_SIZE_PX: f32 = 9.0;

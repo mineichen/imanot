@@ -14,13 +14,12 @@ use nalgebra::Point2;
 use crate::{
     AffectedLayer, MaskImage, PixelArea, RectSelection, RectSelectionResult, Tool, ToolContext,
     ToolFactory,
-    tool::drag::active_selection::{ActiveSelectionLogic, LayerSelection},
+    tool::drag::active_selection::{ActiveSelectionLogic, HoverPart, LayerSelection},
 };
 
 mod active_selection;
 mod frame;
 mod gesture;
-mod overlay;
 mod transform;
 
 #[cfg(test)]
@@ -28,7 +27,7 @@ mod test_support;
 
 use active_selection::ActiveSelection;
 use gesture::{Gesture, GestureMove, GestureResize, GestureRotate};
-use overlay::{HoverPart, hit_test, resize_cursor};
+// use overlay::{HoverPart, hit_test, resize_cursor};
 use transform::{clamp_pixel, cluster_at};
 
 /// Drag-select + transform tool. See `DRAG_TOOL_REFINED.md` for the full plan.
@@ -84,47 +83,25 @@ impl DragTool {
         self.settle();
     }
 
-    /// Is pixel `(x, y)` already covered by `layer`'s currently placed
-    /// selection pixels?
-    fn covers_on_layer(&self, layer: usize, x: u32, y: u32) -> bool {
-        self.selection
-            .as_ref()
-            .is_some_and(|sel| sel.covers_on_layer(layer, x, y))
-    }
-
-    /// Drop the selection if the history tip changed underneath it (external
-    /// push, undo, redo or another tool's commit).
-    fn check_stale(&mut self, masks: &MaskImage) {
-        if self
-            .selection
-            .as_ref()
-            .is_some_and(|sel| sel.is_stale(masks.last_history_action()))
-        {
-            self.drop_selection();
-        }
-    }
-
     /// Empty-space interaction: pan when `pan_on_drag` is set and no layer
     /// covers the cursor, else start a rect selection. Returns true when
     /// panning, in which case the caller must delegate to `PanTool`.
     fn start_empty_space_gesture(
-        &mut self,
+        &self,
         ctx: &mut ToolContext,
         pointer: Pos2,
         img_w: usize,
         img_h: usize,
-    ) -> bool {
+    ) -> Gesture {
         if self.pan_on_drag {
             let (x, y) = clamp_pixel(pointer, img_w, img_h);
             if ctx.image.masks.find_layer_at((x, y)).is_none() {
-                self.gesture = Some(Gesture::Pan);
-                return true;
+                return Gesture::Pan;
             }
         }
         let mut selection = RectSelection::default();
         let _ = selection.drag_finished(ctx);
-        self.gesture = Some(Gesture::Rect(selection));
-        false
+        Gesture::Rect(selection)
     }
 
     /// Click: select the cluster under the cursor (8-connected component of
@@ -159,7 +136,11 @@ impl DragTool {
         // duplicate entries which would clear/add the same pixels twice per
         // commit). A non-additive click replaces the selection, so it falls
         // through to the fresh selection below even when covered.
-        if additive && self.covers_on_layer(idx, x, y) {
+        if additive && {
+            self.selection
+                .as_ref()
+                .is_some_and(|sel| sel.covers_on_layer(idx, x, y))
+        } {
             return;
         }
         let Some(cluster) = cluster_at(&area.pixels, x, y) else {
@@ -194,13 +175,14 @@ impl DragTool {
         // `RectSelection` is shared tool infra still on `Rect`; convert at
         // the boundary — everything inside the drag tool uses `Roi`.
         let roi = Roi::from(result.rect());
-        let layer = self.layer;
-        let mut layers = layer_ranges(masks.subgroups_stack().iter_filtered(layer).filter_map(
-            move |(idx, area)| {
+        let clipped_selected = masks
+            .subgroups_stack()
+            .iter_filtered(self.layer)
+            .filter_map(move |(idx, area)| {
                 let clipped = area.pixels.spans::<u32>().clip(roi).ok()?;
                 Some((idx, area, clipped))
-            },
-        ));
+            });
+        let mut layers = layer_ranges(clipped_selected);
         if let Some(first) = layers.next() {
             if additive && let Some(sel) = self.selection.as_mut() {
                 sel.merge_layers(once(first).chain(layers), masks.last_history_action());
@@ -232,13 +214,12 @@ impl DragTool {
     /// click/rect selection this does not intersect with the tool's own
     /// `AffectedLayer` filter — the caller names the layers explicitly.
     pub fn select_layers(&mut self, masks: &MaskImage, layer: impl Into<AffectedLayer>) {
-        let mut layers = layer_ranges(
-            masks
-                .subgroups_stack()
-                .iter_filtered(layer.into())
-                .map(|(idx, area)| (idx, area, area.pixels.spans::<u32>())),
-        )
-        .map(|(idx, ranges, _)| (idx, LayerSelection::fresh(ranges, None)));
+        let selected = masks
+            .subgroups_stack()
+            .iter_filtered(layer.into())
+            .map(|(idx, area)| (idx, area, area.pixels.spans::<u32>()));
+        let mut layers = layer_ranges(selected)
+            .map(|(idx, ranges, _)| (idx, LayerSelection::fresh(ranges, None)));
         if let Some(first) = layers.next() {
             self.selection = Some(ActiveSelection::from_logic(
                 ActiveSelectionLogic::fresh_from_sorted_ranges_iter(
@@ -259,57 +240,42 @@ impl DragTool {
     /// hit targets (anchors, rotate handle).
     /// Returns true if the caller must delegate the whole interaction to
     /// `PanTool` (pan gesture, consumes `ctx`).
-    fn begin_gesture(&mut self, ctx: &mut ToolContext, img_w: usize, img_h: usize) -> bool {
+    fn begin_gesture(&self, ctx: &mut ToolContext, img_w: usize, img_h: usize) -> Option<Gesture> {
         let press_screen = ctx
             .response
             .interact_pointer_pos()
             .map(|cur| cur - ctx.response.total_drag_delta().unwrap_or(Vec2::ZERO));
         let Some(press_screen) = press_screen else {
-            return false;
+            return None;
         };
         let pointer = ctx.painter.screen_to_image(press_screen);
         let press = Point2::new(pointer.x as f64, pointer.y as f64);
-        let Some((frame, total)) = self.selection.as_ref().map(|s| s.snapshot_transform()) else {
+        let Some(s) = self.selection.as_ref() else {
             // No selection: rect-select, or pan on empty space.
-            return self.start_empty_space_gesture(ctx, pointer, img_w, img_h);
+            return Some(self.start_empty_space_gesture(ctx, pointer, img_w, img_h));
         };
-        match hit_test(&*ctx.painter, press_screen, &frame) {
-            HoverPart::Outside => {
-                // New box selection without Shift replaces the old selection:
-                // drop it as the rubber-band starts so no stale box stays
-                // visible during the drag. With Shift the old selection is
-                // kept for union on release.
-                if !ctx.egui.input(|i| i.modifiers.shift) {
-                    self.drop_selection();
-                }
-                self.start_empty_space_gesture(ctx, pointer, img_w, img_h)
-            }
-            HoverPart::Inside => {
-                self.gesture = Some(Gesture::Move(GestureMove {
+        let (frame, total) = s.snapshot_transform();
+        Some(
+            match active_selection::hit_test(&*ctx.painter, press_screen, &frame) {
+                HoverPart::Outside => self.start_empty_space_gesture(ctx, pointer, img_w, img_h),
+                HoverPart::Inside => Gesture::Move(GestureMove {
                     start: press,
                     base: frame,
                     base_total: total,
-                }));
-                false
-            }
-            HoverPart::Anchor(anchor) => {
-                self.gesture = Some(Gesture::Resize(GestureResize {
+                }),
+                HoverPart::Anchor(anchor) => Gesture::Resize(GestureResize {
                     anchor,
                     start: press,
                     base: frame,
                     base_total: total,
-                }));
-                false
-            }
-            HoverPart::Rotate => {
-                self.gesture = Some(Gesture::Rotate(GestureRotate {
+                }),
+                HoverPart::Rotate => Gesture::Rotate(GestureRotate {
                     start_angle: (press.y - frame.center.y).atan2(press.x - frame.center.x),
                     base: frame,
                     base_total: total,
-                }));
-                false
-            }
-        }
+                }),
+            },
+        )
     }
 
     /// Recompute `selection.frame` and `selection.total` from the current
@@ -347,7 +313,7 @@ impl DragTool {
     /// whole delete across all layers. Uncommitted gesture deltas are
     /// discarded — the mask itself is never touched during a gesture, so
     /// there is nothing to undo there.
-    fn delete_selection(&mut self, masks: &mut MaskImage) {
+    pub fn delete_selection(&mut self, masks: &mut MaskImage) {
         if let Some(sel) = self.selection.take() {
             self.settle();
             sel.delete_all(masks);
@@ -358,16 +324,20 @@ impl DragTool {
     fn hover_cursor(&self, ctx: &ToolContext, pointer_screen: Option<Pos2>) {
         let icon = match (&self.gesture, self.selection.as_ref(), pointer_screen) {
             (Some(Gesture::Move(_)), _, _) => CursorIcon::Grabbing,
-            (Some(Gesture::Resize(g)), Some(sel), _) => resize_cursor(sel.frame(), g.anchor),
+            (Some(Gesture::Resize(g)), Some(sel), _) => {
+                active_selection::resize_cursor(sel.frame(), g.anchor)
+            }
             (Some(Gesture::Rotate(_)), _, _) => CursorIcon::Grabbing,
             (Some(Gesture::Pan), _, _) => CursorIcon::AllScroll,
             (Some(Gesture::Rect(_)), _, _) => CursorIcon::Crosshair,
-            (None, Some(sel), Some(p)) => match hit_test(&*ctx.painter, p, &sel.frame()) {
-                HoverPart::Outside => return,
-                HoverPart::Inside => CursorIcon::Move,
-                HoverPart::Anchor(a) => resize_cursor(&sel.frame(), a),
-                HoverPart::Rotate => CursorIcon::Grab,
-            },
+            (None, Some(sel), Some(p)) => {
+                match active_selection::hit_test(&*ctx.painter, p, &sel.frame()) {
+                    HoverPart::Outside => return,
+                    HoverPart::Inside => CursorIcon::Move,
+                    HoverPart::Anchor(a) => active_selection::resize_cursor(&sel.frame(), a),
+                    HoverPart::Rotate => CursorIcon::Grab,
+                }
+            }
             _ => return,
         };
         ctx.egui.set_cursor_icon(icon);
@@ -441,17 +411,22 @@ impl Tool for DragTool {
                 self.drop_selection();
             }
         }
-        self.check_stale(&ctx.image.masks);
-        if ctx
-            .egui
-            .input(|i| i.key_pressed(egui::Key::Delete) || i.key_pressed(egui::Key::Backspace))
-        {
-            self.delete_selection(&mut ctx.image.masks);
-        }
-        // Keep the image still while a selection is active: postpone loading
-        // of new images so the selection is not lost underneath the tool.
-        if self.selection.is_some() {
-            *ctx.postpone_new_images = true;
+
+        if let Some(sel) = self.selection.take() {
+            let masks = &ctx.image.masks;
+            let stale = sel.is_stale(masks.last_history_action());
+            if stale {
+                self.settle();
+            }
+
+            const KEYS: [egui::Key; 2] = [egui::Key::Delete, egui::Key::Backspace];
+            if ctx.egui.input(|i| KEYS.iter().any(|x| i.key_pressed(*x))) {
+                self.settle();
+                sel.delete_all(&mut ctx.image.masks);
+            } else {
+                *ctx.postpone_new_images = true;
+                self.selection = Some(sel);
+            }
         }
 
         let (w_nz, h_nz) = ctx.image.image.adjust.dimensions();
@@ -485,7 +460,7 @@ impl Tool for DragTool {
                 // showing its highlight underneath (cheap repaint of the live
                 // texture; nothing to show after a replacing drag dropped it).
                 if let Some(s) = self.selection.as_mut() {
-                    s.render_selection(ctx.egui, &mut *ctx.painter, img_roi);
+                    s.render_selection(ctx.egui, ctx.painter, img_roi);
                 }
             }
             Some(Gesture::Move(_) | Gesture::Resize(_) | Gesture::Rotate(_)) => {
@@ -506,9 +481,12 @@ impl Tool for DragTool {
                 self.hover_cursor(&ctx, pointer_screen);
             }
             None => {
-                if ctx.response.drag_started() && self.begin_gesture(&mut ctx, img_w, img_h) {
-                    return;
-                } else if ctx.response.clicked()
+                if ctx.response.drag_started()
+                    && let Some(new_gest) = self.begin_gesture(&mut ctx, img_w, img_h)
+                {
+                    self.gesture = Some(new_gest);
+                }
+                if ctx.response.clicked()
                     && !ctx.response.drag_stopped()
                     && let Some(p) = pointer
                 {
@@ -712,7 +690,8 @@ mod tests {
         let mut masks = mask_with_two_clusters();
         let mut tool = DragTool::default();
         click(&mut tool, &mut masks, 0.0, 0.0, false);
-        assert!(tool.covers_on_layer(0, 0, 0));
+        let sel = tool.selection.as_ref().unwrap();
+        assert!(sel.covers_on_layer(0, 0, 0));
         click(&mut tool, &mut masks, 6.0, 3.0, true);
         let sel = tool.selection.as_ref().unwrap();
         // Same layer unions into a single entry (like rect-select): both
@@ -767,7 +746,7 @@ mod tests {
         assert!(tool.selection.is_none());
         click(&mut tool, &mut masks, 0.0, 0.0, false);
         click(&mut tool, &mut masks, 51.0, 0.0, true);
-        assert!(tool.covers_on_layer(0, 0, 0));
+        assert!(tool.selection.unwrap().covers_on_layer(0, 0, 0));
     }
 
     #[test]
