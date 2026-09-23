@@ -128,6 +128,7 @@ impl DragTool {
             .subgroups_stack()
             .iter_filtered(self.layer)
             .rev()
+            // Might be ineffective
             .filter(|(_, area)| area.pixels.contains(x, y))
             .find_map(|(i, area)| {
                 let selection = cluster_at(&area.pixels, x, y)?;
@@ -145,10 +146,9 @@ impl DragTool {
     /// With `additive` (Shift held), the rect's pixels are unioned into the
     /// existing selection instead of replacing it; an empty rect then keeps
     /// the selection unchanged.
-    fn select_rect(&mut self, masks: &MaskImage, result: &RectSelectionResult, additive: bool) {
+    fn select_rect(&mut self, masks: &MaskImage, roi: Roi<u32>, additive: bool) {
         // `RectSelection` is shared tool infra still on `Rect`; convert at
         // the boundary — everything inside the drag tool uses `Roi`.
-        let roi = Roi::from(result.rect());
         let clipped_selected = masks
             .subgroups_stack()
             .iter_filtered(self.layer)
@@ -421,7 +421,7 @@ impl Tool for DragTool {
                     // Shift on release adds to the selection instead of
                     // replacing it.
                     let additive = ctx.egui.input(|i| i.modifiers.shift);
-                    self.select_rect(&ctx.image.masks, &result, additive);
+                    self.select_rect(&ctx.image.masks, Roi::from(result.rect()), additive);
                     self.settle();
                 } else if !ctx.response.dragged() {
                     self.gesture = None;
@@ -568,10 +568,8 @@ mod tests {
     /// Rect-select the 5x5 block placed by [`mask_with_rect`]: the whole
     /// layer, so the background is empty — same shape the `select_layer`
     /// helper used to build by hand.
-    fn select_rect_block(tool: &mut DragTool, masks: &MaskImage, x: usize, y: usize) {
-        let w = nz(100);
-        let r = RectSelectionResult::new(x, y, x + 5, y + 5, w, w).unwrap();
-        tool.select_rect(masks, &r, false);
+    fn select_rect_block(tool: &mut DragTool, masks: &MaskImage, x: u32, y: u32) {
+        tool.select_rect(masks, Roi::new(x..x + 5, y..y + 5), false);
     }
 
     /// Simulate a Move gesture from `from` to `to` through the real update
@@ -752,9 +750,7 @@ mod tests {
     fn shift_rect_unions_same_layer() {
         let masks = mask_with_two_clusters();
         let mut tool = DragTool::default();
-        let w = nz(100);
-        let a = RectSelectionResult::new(0, 0, 3, 1, w, w).unwrap();
-        tool.select_rect(&masks, &a, false);
+        tool.select_rect(&masks, Roi::new(0..3, 0..1), false);
         let sel = tool.selection.as_ref().unwrap();
         assert!(sel.covers_on_layer(0, 0, 0));
         assert!(!sel.covers_on_layer(0, 6, 3));
@@ -763,8 +759,7 @@ mod tests {
         assert_eq!(sel.frame().half, Vector2::new(1.0, 0.5));
         // Shift-rect over the second cluster unions: the frame hugs the
         // combined content (0..7, 0..4).
-        let b = RectSelectionResult::new(4, 2, 8, 4, w, w).unwrap();
-        tool.select_rect(&masks, &b, true);
+        tool.select_rect(&masks, Roi::new(4..8, 2..4), true);
         let sel = tool.selection.as_ref().unwrap();
         assert!(sel.covers_on_layer(0, 6, 3));
         assert_eq!(sel.frame().center, Point2::new(3.5, 2.0));
@@ -961,9 +956,7 @@ mod tests {
         // Rect-select, then two fractional moves.
         let mut masks = mask_blocks();
         let mut tool = DragTool::default();
-        let w = nz(100);
-        let r = RectSelectionResult::new(8, 8, 22, 16, w, w).unwrap();
-        tool.select_rect(&masks, &r, false);
+        tool.select_rect(&masks, Roi::new(8..22, 8..16), false);
         drag_move(&mut tool, Point2::new(15.0, 12.5), Point2::new(19.7, 14.8));
         tool.commit(&mut masks, img_roi());
         assert!(outsider_block_ok(&masks));
