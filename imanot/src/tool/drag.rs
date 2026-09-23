@@ -124,46 +124,20 @@ impl DragTool {
         // a click is "empty space" when no *affected* layer covers it, even if
         // an unaffected layer has a pixel there — then a non-additive click
         // clears the selection below.
-        let Some((idx, area)) = masks.subgroups_stack().iter().rev().find_map(|(i, area)| {
-            (self.layer.affects(i) && area.pixels.contains(x, y)).then_some((i, area))
-        }) else {
-            if !additive {
-                self.drop_selection();
-            }
-            return;
-        };
-        // Additive re-click of an already-selected cluster is a no-op (avoids
-        // duplicate entries which would clear/add the same pixels twice per
-        // commit). A non-additive click replaces the selection, so it falls
-        // through to the fresh selection below even when covered.
-        if additive && {
-            self.selection
-                .as_ref()
-                .is_some_and(|sel| sel.covers_on_layer(idx, x, y))
-        } {
+        let all = masks
+            .subgroups_stack()
+            .iter_filtered(self.layer)
+            .rev()
+            .filter(|(_, area)| area.pixels.contains(x, y))
+            .find_map(|(i, area)| {
+                let selection = cluster_at(&area.pixels, x, y)?;
+                Some((i, area, selection))
+            });
+        if all.is_none() && additive {
             return;
         }
-        let Some(cluster) = cluster_at(&area.pixels, x, y) else {
-            return;
-        };
-        // Non-selected layer content: re-added under every cleared footprint
-        // so later moves cannot erase it.
-        let (background, original) = subtract_ranges_collect_subtrahend(&area.pixels, cluster);
-
-        if additive && let Some(sel) = &mut self.selection {
-            sel.merge_layers(
-                once((idx, original, background)),
-                masks.last_history_action(),
-            );
-        } else {
-            // New click without Shift replaces the old selection.
-            self.selection = Some(ActiveSelection::fresh_single(
-                idx,
-                original,
-                background,
-                masks.last_history_action(),
-            ));
-        }
+        let layers = layer_ranges(all.into_iter());
+        self.select_internal(masks, additive, layers)
     }
 
     /// Build a selection from a finished rect selection: all pixels inside the
@@ -182,23 +156,8 @@ impl DragTool {
                 let clipped = area.pixels.spans::<u32>().clip(roi).ok()?;
                 Some((idx, area, clipped))
             });
-        let mut layers = layer_ranges(clipped_selected);
-        if let Some(first) = layers.next() {
-            if additive && let Some(sel) = self.selection.as_mut() {
-                sel.merge_layers(once(first).chain(layers), masks.last_history_action());
-            } else {
-                self.selection = Some(ActiveSelection::from_logic(
-                    ActiveSelectionLogic::fresh_from_sorted_ranges_iter(
-                        (first.0, LayerSelection::fresh(first.1, first.2)),
-                        layers.map(|(idx, r, bg)| (idx, LayerSelection::fresh(r, bg))),
-                        masks.last_history_action(),
-                    ),
-                ));
-            }
-        } else {
-            // Nothing selected: no box to show, drop any previous selection.
-            self.drop_selection();
-        }
+        let layers = layer_ranges(clipped_selected);
+        self.select_internal(masks, additive, layers)
     }
 
     /// Programmatically select whole mask layers: all pixels of every layer
@@ -217,20 +176,31 @@ impl DragTool {
         let selected = masks
             .subgroups_stack()
             .iter_filtered(layer.into())
-            .map(|(idx, area)| (idx, area, area.pixels.spans::<u32>()));
-        let mut layers = layer_ranges(selected)
-            .map(|(idx, ranges, _)| (idx, LayerSelection::fresh(ranges, None)));
+            .map(|(idx, area)| (idx, area.pixels.clone(), None));
+
+        self.select_internal(masks, false, selected);
+    }
+
+    fn select_internal<'m>(
+        &mut self,
+        masks: &MaskImage,
+        additive: bool,
+        mut layers: impl Iterator<Item = (usize, SortedRanges<u32>, Option<SortedRanges<u32>>)> + 'm,
+    ) {
         if let Some(first) = layers.next() {
-            self.selection = Some(ActiveSelection::from_logic(
-                ActiveSelectionLogic::fresh_from_sorted_ranges_iter(
-                    first,
-                    layers,
-                    masks.last_history_action(),
-                ),
-            ));
+            if additive && let Some(sel) = self.selection.as_mut() {
+                sel.merge_layers(once(first).chain(layers), masks.last_history_action());
+            } else {
+                self.selection = Some(ActiveSelection::from_logic(
+                    ActiveSelectionLogic::fresh_from_sorted_ranges_iter(
+                        (first.0, LayerSelection::fresh(first.1, first.2)),
+                        layers.map(|(idx, r, bg)| (idx, LayerSelection::fresh(r, bg))),
+                        masks.last_history_action(),
+                    ),
+                ));
+            }
         } else {
-            self.selection = None;
-            self.settle();
+            self.drop_selection();
         }
     }
     /// Decide what a fresh drag does and store it in `self.gesture`.
@@ -505,9 +475,9 @@ impl Tool for DragTool {
         {
             s.render_selection(ctx.egui, &mut *ctx.painter, img_roi);
         }
-        if self.selection.is_some() {
-            *ctx.postpone_new_images = true;
-        }
+        // if self.selection.is_some() {
+        //     *ctx.postpone_new_images = true;
+        // }
     }
 }
 
