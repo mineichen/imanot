@@ -6,8 +6,10 @@ use nalgebra::Matrix3;
 
 use super::super::frame::Frame;
 use super::super::transform::transform_layer;
-use crate::tool::drag::transform::{build_add_untracked, build_clear_untracked};
-use crate::{HistoryAction, MaskImage};
+use crate::{
+    AffectedLayer, HistoryAction, HistoryActionAdd, HistoryActionClear, HistoryActionKind,
+    MaskImage,
+};
 
 mod layer;
 
@@ -35,9 +37,7 @@ pub(crate) struct ActiveSelectionLogic {
 
 impl ActiveSelectionLogic {
     pub(crate) fn rebase(&mut self, tip: Option<HistoryAction>) {
-        self.layers.values_mut().for_each(|l| {
-            l.original = l.committed.clone();
-        });
+        self.layers.values_mut().for_each(|l| l.rebase());
         self.total = Matrix3::identity();
         self.tip = tip;
     }
@@ -61,10 +61,10 @@ impl ActiveSelectionLogic {
         parts: impl Iterator<Item = (usize, LayerSelection)>,
         tip: Option<HistoryAction>,
     ) -> Self {
-        let mut content = first.1.original.roi();
+        let mut content = first.1.original_roi();
         let layers = std::iter::once(first)
             .chain(parts.inspect(|x| {
-                content = content.union(&x.1.original.roi());
+                content = content.union(&x.1.original_roi());
             }))
             .collect::<BTreeMap<_, _>>();
 
@@ -168,7 +168,7 @@ impl ActiveSelectionLogic {
     /// Pristine originals for preview rasterization (read-only refs: the
     /// snapshot content can only change via `merge_layer`/`rebase`/ctor).
     pub(crate) fn originals(&self) -> impl Iterator<Item = &SortedRanges<u32>> {
-        self.layers.values().map(|l| &l.original)
+        self.layers.values().map(LayerSelection::original)
     }
 
     /// Commit the current transform: Clear previously committed ranges, Add
@@ -183,7 +183,7 @@ impl ActiveSelectionLogic {
             .layers
             .iter_mut()
             .map(|(idx, ls)| {
-                let new = transform_layer(&ls.original, &matrix, img_roi);
+                let new = transform_layer(ls.original(), &matrix, img_roi);
                 should_abort &= new.as_ref() == Some(&ls.committed);
                 (idx, ls, new)
             })
@@ -247,6 +247,21 @@ fn add_history_actions(
     r
 }
 
+fn build_add_untracked(layer: usize, pixel_area: SortedRanges<u32>) -> HistoryAction {
+    HistoryAction {
+        kind: HistoryActionKind::Add(HistoryActionAdd { pixel_area }),
+        layer: AffectedLayer::Layer(layer),
+        tracked: false,
+    }
+}
+
+fn build_clear_untracked(layer: usize, ranges: SortedRanges<u32>) -> HistoryAction {
+    HistoryAction {
+        kind: HistoryActionKind::Clear(HistoryActionClear { ranges }),
+        layer: AffectedLayer::Layer(layer),
+        tracked: false,
+    }
+}
 #[cfg(test)]
 mod tests {
     use imask::ImaskSet;
@@ -343,7 +358,7 @@ mod tests {
             placed.spans::<u32>().union(entry.committed.spans()),
         )
         .unwrap();
-        assert_eq!(entry.original, union);
+        assert_eq!(entry.original(), &union);
         assert_eq!(logic.total, Matrix3::identity());
         assert_eq!(logic.tip, masks.last_history_action());
     }

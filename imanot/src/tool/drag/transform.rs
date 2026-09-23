@@ -16,35 +16,8 @@ pub(crate) fn transform_layer(
     img_roi: Roi<u32>,
 ) -> Option<SortedRanges<u32>> {
     let heap = AffineTransformHeap::new(original.spans::<u32>(), matrix).ok()?;
-    let clipped = clip_heap_to_image(heap, img_roi)?;
+    let clipped = heap.clip(img_roi).ok()?;
     SortedRanges::try_from_span_iter_minbounds(clipped).ok()
-}
-
-pub(crate) fn build_add_untracked(layer: usize, pixel_area: SortedRanges<u32>) -> HistoryAction {
-    HistoryAction {
-        kind: HistoryActionKind::Add(HistoryActionAdd { pixel_area }),
-        layer: AffectedLayer::Layer(layer),
-        tracked: false,
-    }
-}
-
-pub(crate) fn build_clear_untracked(layer: usize, ranges: SortedRanges<u32>) -> HistoryAction {
-    HistoryAction {
-        kind: HistoryActionKind::Clear(HistoryActionClear { ranges }),
-        layer: AffectedLayer::Layer(layer),
-        tracked: false,
-    }
-}
-
-/// Clip a transform result to the image rect via the imask `clip` combinator.
-/// `None` if fully outside (checked upfront: the clip iterator panics on
-/// empty intersection).
-pub(crate) fn clip_heap_to_image(
-    heap: AffineTransformHeap,
-    img_roi: Roi<u32>,
-) -> Option<ClipSpanIter<AffineTransformHeap, u32>> {
-    heap.roi().intersection(&img_roi)?;
-    Some(heap.clip(img_roi).ok()?)
 }
 
 /// Find the 8-connected cluster of `ranges` containing pixel `(x, y)`.
