@@ -68,19 +68,11 @@ impl DragTool {
         })
     }
 
-    /// Drop any in-progress gesture. Selection replacement and drops need no
-    /// explicit preview handling: the preview lives inside `ActiveSelection`
-    /// and dies or starts fresh with it. In-place selection mutations reset
-    /// it at the mutation point (`merge_layers`).
-    fn settle(&mut self) {
-        self.gesture = None;
-    }
-
     /// Drop the whole selection (no box left to show). The preview dies with
     /// it; any in-progress gesture is dropped too.
     fn drop_selection(&mut self) {
         self.selection = None;
-        self.settle();
+        self.gesture = None;
     }
 
     /// Empty-space interaction: pan when `pan_on_drag` is set and no layer
@@ -273,7 +265,7 @@ impl DragTool {
             if let Some(sel) = sel.commit_transform(masks, img_roi) {
                 self.selection = Some(sel);
             }
-            self.settle();
+            self.gesture = None;
         };
     }
 
@@ -285,7 +277,7 @@ impl DragTool {
     /// there is nothing to undo there.
     pub fn delete_selection(&mut self, masks: &mut MaskImage) {
         if let Some(sel) = self.selection.take() {
-            self.settle();
+            self.gesture = None;
             sel.delete_all(masks);
         };
     }
@@ -386,12 +378,12 @@ impl Tool for DragTool {
             let masks = &ctx.image.masks;
             let stale = sel.is_stale(masks.last_history_action());
             if stale {
-                self.settle();
+                self.gesture = None;
             }
 
             const KEYS: [egui::Key; 2] = [egui::Key::Delete, egui::Key::Backspace];
             if ctx.egui.input(|i| KEYS.iter().any(|x| i.key_pressed(*x))) {
-                self.settle();
+                self.gesture = None;
                 sel.delete_all(&mut ctx.image.masks);
             } else {
                 *ctx.postpone_new_images = true;
@@ -422,7 +414,7 @@ impl Tool for DragTool {
                     // replacing it.
                     let additive = ctx.egui.input(|i| i.modifiers.shift);
                     self.select_rect(&ctx.image.masks, Roi::from(result.rect()), additive);
-                    self.settle();
+                    self.gesture = None;
                 } else if !ctx.response.dragged() {
                     self.gesture = None;
                 }
@@ -585,7 +577,7 @@ mod tests {
             base_total: total,
         }));
         tool.update_gesture_frame(to, false);
-        tool.settle();
+        tool.gesture = None;
     }
 
     #[test]
@@ -820,7 +812,7 @@ mod tests {
             base_total: total,
         }));
         tool.update_gesture_frame(to, shift);
-        tool.settle();
+        tool.gesture = None;
     }
 
     fn mask_with_three_layers() -> MaskImage {
