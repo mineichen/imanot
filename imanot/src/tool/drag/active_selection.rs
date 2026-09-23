@@ -142,22 +142,10 @@ impl ActiveSelection {
         img_roi: imask::Roi<u32>,
         allow_reposition: bool,
     ) {
-        let matrix = self.logic.total();
-        // One lazy iterator per layer (analytic transform ∩ image), merged
-        // into a single ordered, self-bounded span stream: no span is ever
-        // collected.
-        let chains = self.logic.originals().filter_map(|original| {
-            let heap = AffineTransformHeap::new(original.spans::<u32>(), &matrix).ok()?;
-            heap.clip(img_roi).ok()
-        });
-
-        match UnionAll::new(chains) {
-            Ok(all) => {
-                self.preview.show(egui_ctx, painter, all, allow_reposition);
-            }
-            Err(_) => {
-                self.preview.hide();
-            }
+        if let Ok(all) = self.logic.transformed(img_roi) {
+            self.preview.show(egui_ctx, painter, all, allow_reposition);
+        } else {
+            self.preview.hide();
         }
         draw_overlay(painter, self.logic.frame());
     }

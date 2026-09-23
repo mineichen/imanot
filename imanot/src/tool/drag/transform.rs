@@ -1,12 +1,6 @@
 use egui::Pos2;
-use imask::{
-    AffineTransformHeap, ClipSpanIter, ImageDimension, ImaskSet, Roi, SortedRanges, SpanCluster,
-};
+use imask::{AffineTransformHeap, ImageDimension, ImaskSet, Roi, SortedRanges, SpanCluster};
 use nalgebra::Matrix3;
-
-use crate::{
-    AffectedLayer, HistoryAction, HistoryActionAdd, HistoryActionClear, HistoryActionKind,
-};
 
 /// Transform `original` by `matrix`, clipped to the image. `None` if nothing
 /// remains visible.
