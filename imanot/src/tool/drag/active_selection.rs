@@ -1,10 +1,10 @@
-use imask::{AffineTransformHeap, Roi, SortedRanges, UnionAll};
+use imask::{AffineTransformHeap, ImaskSet, Roi, SortedRanges, UnionAll};
 use nalgebra::Matrix3;
 
 use crate::{HistoryAction, ImagePainter, MaskImage};
 
 use super::frame::Frame;
-use super::{overlay::draw_overlay, transform::clip_heap_to_image};
+use super::overlay::draw_overlay;
 
 pub(crate) mod logic;
 pub(crate) mod preview;
@@ -148,7 +148,7 @@ impl ActiveSelection {
         // collected.
         let chains = self.logic.originals().filter_map(|original| {
             let heap = AffineTransformHeap::new(original.spans::<u32>(), &matrix).ok()?;
-            clip_heap_to_image(heap, img_roi)
+            heap.clip(img_roi).ok()
         });
 
         match UnionAll::new(chains) {

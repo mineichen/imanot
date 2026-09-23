@@ -1,4 +1,4 @@
-use imask::{ImageDimension, ImaskSet, SortedRanges, Span};
+use imask::{ImageDimension, ImaskSet, Roi, SortedRanges, Span};
 
 /// One selected layer: the pristine `original` ranges (snapshotted at
 /// selection time, never modified) plus the `committed` ranges (what the last
@@ -11,9 +11,9 @@ use imask::{ImageDimension, ImaskSet, SortedRanges, Span};
 /// footprint, so pixels outside the original selection always remain
 /// unchanged — even ones a previous commit overlapped.
 pub(in super::super::super) struct LayerSelection {
-    pub(super) original: SortedRanges<u32>,
+    original: SortedRanges<u32>,
     pub(super) committed: SortedRanges<u32>,
-    pub(super) background: Option<SortedRanges<u32>>,
+    background: Option<SortedRanges<u32>>,
 }
 
 impl LayerSelection {
@@ -30,6 +30,17 @@ impl LayerSelection {
         }
     }
 
+    pub(super) fn rebase(&mut self) {
+        self.original = self.committed.clone();
+    }
+
+    pub(super) fn original(&self) -> &SortedRanges<u32> {
+        &self.original
+    }
+
+    pub(super) fn original_roi(&self) -> Roi<u32> {
+        self.original.roi()
+    }
     pub(super) fn update(mut self, ranges: &SortedRanges<u32>) -> Option<Self> {
         union_ranges(&self.original, ranges)
             .zip(union_ranges(&self.committed, ranges))
