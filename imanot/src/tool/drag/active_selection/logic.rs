@@ -1,5 +1,5 @@
-use std::collections::BTreeMap;
 use std::collections::btree_map::Entry;
+use std::{collections::BTreeMap, iter::once};
 
 use imask::{
     AffineTransformHeap, ImageDimension, ImaskSet, PipelineError, Roi, SortedRanges, Span, UnionAll,
@@ -38,11 +38,6 @@ pub(crate) struct ActiveSelectionLogic {
 }
 
 impl ActiveSelectionLogic {
-    pub(crate) fn rebase(&mut self, tip: Option<HistoryAction>) {
-        self.layers.values_mut().for_each(|l| l.rebase());
-        self.total = Matrix3::identity();
-        self.tip = tip;
-    }
     /// Fresh (replacing) single-layer selection. `original == committed`.
     pub(crate) fn fresh_single(
         idx: usize,
@@ -64,7 +59,7 @@ impl ActiveSelectionLogic {
         tip: Option<HistoryAction>,
     ) -> Self {
         let mut content = first.1.original_roi();
-        let layers = std::iter::once(first)
+        let layers = once(first)
             .chain(parts.inspect(|x| {
                 content = content.union(&x.1.original_roi());
             }))
@@ -78,17 +73,29 @@ impl ActiveSelectionLogic {
         }
     }
 
-    /// Add `ranges` on layer `idx`, unioning into the existing entry when the
-    /// layer is already selected. Unioning is idempotent, so re-adding the
-    /// same pixels is a no-op — and required: separate entries for one layer
-    /// would clear/add the same layer twice per commit, subtracting or
-    /// duplicating content on resize/move. `background` is the layer's
-    /// non-selected content for a not-yet-selected layer; entries that
-    /// already exist shrink their own background instead.
-    ///
+    /// Shift-add batch: bake placed pixels into the snapshot and reset the
+    /// transform ([`Self::rebase`], so later gestures transform old and new
+    /// pixels uniformly), then union every new part ([`Self::merge_layer`]).
+    /// Takes the new history tip so the staleness guard is always re-armed
+    /// together with the rebase — callers must not set `tip` separately.
+    /// Consumes the parts lazily; callers pass `std::iter::once(first).chain(rest)`
+    /// after peeking non-emptiness, so no intermediate collection is needed.
     /// Unioning changes the snapshot content the preview is rasterized from,
     /// so callers must clear the preview afterwards (see
     /// [`super::ActiveSelection::merge_layers`]).
+    pub(crate) fn merge_layers(
+        &mut self,
+        parts: impl Iterator<Item = (usize, SortedRanges<u32>, Option<SortedRanges<u32>>)>,
+        tip: Option<HistoryAction>,
+    ) {
+        self.layers.values_mut().for_each(|l| l.rebase());
+        self.total = Matrix3::identity();
+        self.tip = tip;
+        for (layer_id, ranges, background) in parts {
+            self.merge_layer(layer_id, ranges, background);
+        }
+    }
+
     fn merge_layer(
         &mut self,
         layer_id: usize,
@@ -109,37 +116,10 @@ impl ActiveSelectionLogic {
         }
     }
 
-    /// Shift-add batch: bake placed pixels into the snapshot and reset the
-    /// transform ([`Self::rebase`], so later gestures transform old and new
-    /// pixels uniformly), then union every new part ([`Self::merge_layer`]).
-    /// Takes the new history tip so the staleness guard is always re-armed
-    /// together with the rebase — callers must not set `tip` separately.
-    /// Consumes the parts lazily; callers pass `std::iter::once(first).chain(rest)`
-    /// after peeking non-emptiness, so no intermediate collection is needed.
-    /// Unioning changes the snapshot content the preview is rasterized from,
-    /// so callers must clear the preview afterwards (see
-    /// [`super::ActiveSelection::merge_layers`]).
-    pub(crate) fn merge_layers(
-        &mut self,
-        parts: impl Iterator<Item = (usize, SortedRanges<u32>, Option<SortedRanges<u32>>)>,
-        tip: Option<HistoryAction>,
-    ) {
-        self.rebase(tip);
-        for (layer_id, ranges, background) in parts {
-            self.merge_layer(layer_id, ranges, background);
-        }
-    }
-
     /// Current frame by value (`Frame` is `Copy`): overlay, anchors,
     /// hit-testing. Read-only; mutation goes through [`Self::set_transform`].
     pub(crate) fn frame(&self) -> &Frame {
         &self.frame
-    }
-
-    /// Current accumulated transform by value. Read-only; mutation goes
-    /// through [`Self::set_transform`], `rebase` or construction.
-    pub(crate) fn total(&self) -> Matrix3<f64> {
-        self.total
     }
 
     /// Atomic `frame ↔ total` update for gesture progress / cancel. The only
@@ -171,7 +151,7 @@ impl ActiveSelectionLogic {
         &self,
         img_roi: Roi<u32>,
     ) -> Result<impl Iterator<Item = Span<u32>> + ImageDimension, PipelineError> {
-        let matrix = self.total();
+        let matrix = self.total;
         UnionAll::new(
             self.layers
                 .values()
@@ -192,34 +172,32 @@ impl ActiveSelectionLogic {
     /// and `tip` untouched.
     pub(crate) fn commit(mut self, masks: &mut MaskImage, img_roi: Roi<u32>) -> Option<Self> {
         let matrix = self.total;
-        let mut should_abort = true;
+        let mut is_unchanged = true;
         let computed = self
             .layers
             .iter_mut()
             .map(|(idx, ls)| {
                 let new = transform_layer(ls.original(), &matrix, img_roi);
-                should_abort &= new.as_ref() == Some(&ls.committed);
+                is_unchanged &= new.as_ref() == Some(&ls.committed);
                 (idx, ls, new)
             })
             .collect::<Vec<_>>();
-        if should_abort {
+        if is_unchanged {
             return Some(self);
         }
 
         let actions = computed.into_iter().flat_map(|(&layer, ls, new)| {
-            let restore = ls
-                .restore()
-                .and_then(|i| SortedRanges::try_from_span_iter(i).ok());
+            let restore = ls.restore();
             let clear = build_clear_untracked(layer, ls.committed.clone());
             let add = new
                 .map(move |new| {
                     let add = build_add_untracked(layer, new.clone());
                     ls.committed = new;
-                    std::iter::once(add).chain(restore.map(|r| build_add_untracked(layer, r)))
+                    once(add).chain(restore.map(|r| build_add_untracked(layer, r)))
                 })
                 .into_iter()
                 .flatten();
-            std::iter::once(clear).chain(add)
+            once(clear).chain(add)
         });
 
         let r = add_history_actions(masks, actions);
@@ -235,12 +213,9 @@ impl ActiveSelectionLogic {
         add_history_actions(
             masks,
             self.layers.into_iter().flat_map(|(layer, ls)| {
-                let restore = ls
-                    .restore()
-                    .and_then(|i| SortedRanges::try_from_span_iter(i).ok());
+                let add = ls.restore().map(|r| build_add_untracked(layer, r));
                 let clear = build_clear_untracked(layer, ls.committed);
-                let add = restore.map(|r| build_add_untracked(layer, r));
-                std::iter::once(clear).chain(add)
+                once(clear).chain(add)
             }),
         );
     }
@@ -312,8 +287,8 @@ mod tests {
             layer_pixels(&masks),
             Some(rect_ranges(15, 10, nz(5), nz(5)))
         );
-        assert_eq!(logic.frame().center, Point2::new(17.5, 12.5));
-        assert_eq!(logic.frame().half, Vector2::new(2.5, 2.5));
+        assert_eq!(logic.frame.center, Point2::new(17.5, 12.5));
+        assert_eq!(logic.frame.half, Vector2::new(2.5, 2.5));
     }
 
     #[test]

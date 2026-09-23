@@ -4,13 +4,15 @@ use nalgebra::Matrix3;
 use crate::{HistoryAction, ImagePainter, MaskImage};
 
 use super::frame::Frame;
-use super::overlay::draw_overlay;
+use overlay::draw_overlay;
 
 pub(crate) mod logic;
+mod overlay;
 pub(crate) mod preview;
 
 pub(crate) use logic::ActiveSelectionLogic;
 pub(in crate::tool::drag) use logic::LayerSelection;
+pub(super) use overlay::*;
 
 /// A live selection: pure snapshot logic plus its small preview texture. The
 /// preview starts hidden (the first render uploads it) and dies with the
@@ -187,7 +189,7 @@ mod tests {
         selection.render_transform(&ctx, &mut painter, img_roi(), false);
         assert!(selection.preview.is_visible());
         // Advance frame and matrix together, as a finished Move gesture would.
-        let (frame, total) = selection.snapshot_transform();
+        let (frame, total) = selection.logic.snapshot_transform();
         let delta = Vector2::new(5.0, 0.0);
         selection.set_transform(
             Frame {
