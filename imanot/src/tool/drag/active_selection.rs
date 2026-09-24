@@ -29,19 +29,6 @@ pub(crate) struct ActiveSelection {
 }
 
 impl ActiveSelection {
-    /// Fresh single-layer selection with a hidden preview (see
-    /// [`ActiveSelectionLogic::fresh_single`]).
-    #[cfg(test)]
-    pub(crate) fn fresh_single(
-        idx: usize,
-        ranges: SortedRanges<u32>,
-        background: Option<SortedRanges<u32>>,
-        tip: Option<HistoryAction>,
-    ) -> Self {
-        Self::from_logic(ActiveSelectionLogic::fresh_single(
-            idx, ranges, background, tip,
-        ))
-    }
     /// Render an idle (no active transform) selection: the black overlay of
     /// the actually selected pixels plus the frame overlay. The frame alone
     /// is not enough — e.g. a rect selection only covers the dragged box,
@@ -180,8 +167,13 @@ mod tests {
         // Dropping the selection at a new position must not re-rasterize:
         // the placed pixels are exactly what the preview already shows.
         let (mut masks, block, outsiders) = mask_with_outsiders();
-        let mut selection =
-            ActiveSelection::fresh_single(0, block, Some(outsiders), masks.last_history_action());
+        let mut selection = ActiveSelection::from_logic(
+            ActiveSelectionLogic::fresh_from_sorted_ranges_iter(
+                (0, LayerSelection::fresh(block, Some(outsiders))),
+                std::iter::empty(),
+                masks.last_history_action(),
+            ),
+        );
         let ctx = egui::Context::default();
         let screen =
             egui::Rect::from_min_max(egui::Pos2::new(0.0, 0.0), egui::Pos2::new(100.0, 100.0));
