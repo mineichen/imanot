@@ -1,9 +1,11 @@
 mod brush;
+mod drag;
 mod pan;
 mod rect;
 mod rect_selection;
 
 pub use brush::*;
+pub use drag::*;
 pub use pan::*;
 pub use rect::*;
 pub use rect_selection::*;

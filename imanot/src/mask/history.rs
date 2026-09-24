@@ -35,7 +35,7 @@ pub struct HistoryActionAdd {
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct HistoryActionClear {
-    pub ranges: SortedRanges<u64>,
+    pub ranges: SortedRanges<u32>,
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -249,7 +249,7 @@ mod tests {
     use super::*;
     use crate::PixelAreaStack;
 
-    fn tracked_add(x: u32) -> HistoryAction {
+    fn tracked_add(x: u16) -> HistoryAction {
         HistoryAction {
             kind: HistoryActionKind::Add(HistoryActionAdd {
                 pixel_area: Span::new(x..x + 1, 0).into(),
@@ -259,7 +259,7 @@ mod tests {
         }
     }
 
-    fn untracked_add(x: u32) -> HistoryAction {
+    fn untracked_add(x: u16) -> HistoryAction {
         HistoryAction {
             kind: HistoryActionKind::Add(HistoryActionAdd {
                 pixel_area: Span::new(x..x + 1, 0).into(),
@@ -413,7 +413,7 @@ mod tests {
         assert_eq!(history.take_dirty(), Some(AffectedLayer::Layer(1)));
     }
 
-    fn untracked_add_area(x: u32, y: u32) -> HistoryAction {
+    fn untracked_add_area(x: u16, y: u16) -> HistoryAction {
         HistoryAction {
             kind: HistoryActionKind::Add(HistoryActionAdd {
                 pixel_area: Span::new(x..x + 2, y).into(),
