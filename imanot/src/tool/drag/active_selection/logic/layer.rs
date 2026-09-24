@@ -1,4 +1,4 @@
-use imask::{ImageDimension, ImaskSet, Roi, SortedRanges, Span};
+use imask::{ImageDimension, ImaskSet, Roi, SortedRanges};
 
 /// One selected layer: the pristine `original` ranges (snapshotted at
 /// selection time, never modified) plus the `committed` ranges (what the last

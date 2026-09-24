@@ -1,4 +1,4 @@
-use imask::{AffineTransformHeap, ImaskSet, Roi, SortedRanges, UnionAll};
+use imask::{Roi, SortedRanges};
 use nalgebra::Matrix3;
 
 use crate::{HistoryAction, ImagePainter, MaskImage};
@@ -31,6 +31,7 @@ pub(crate) struct ActiveSelection {
 impl ActiveSelection {
     /// Fresh single-layer selection with a hidden preview (see
     /// [`ActiveSelectionLogic::fresh_single`]).
+    #[cfg(test)]
     pub(crate) fn fresh_single(
         idx: usize,
         ranges: SortedRanges<u32>,
@@ -109,7 +110,7 @@ impl ActiveSelection {
         self.logic.is_stale(current)
     }
 
-    /// See [`ActiveSelectionLogic::covers_on_layer`].
+    #[cfg(test)]
     pub(crate) fn covers_on_layer(&self, layer: usize, x: u32, y: u32) -> bool {
         self.logic.covers_on_layer(layer, x, y)
     }

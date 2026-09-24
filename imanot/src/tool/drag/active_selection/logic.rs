@@ -39,6 +39,7 @@ pub(crate) struct ActiveSelectionLogic {
 
 impl ActiveSelectionLogic {
     /// Fresh (replacing) single-layer selection. `original == committed`.
+    #[cfg(test)]
     pub(crate) fn fresh_single(
         idx: usize,
         ranges: SortedRanges<u32>,
@@ -140,7 +141,7 @@ impl ActiveSelectionLogic {
         self.tip != current
     }
 
-    /// Whether `layer`'s currently placed pixels cover `(x, y)`.
+    #[cfg(test)]
     pub(crate) fn covers_on_layer(&self, layer: usize, x: u32, y: u32) -> bool {
         self.layers
             .get(&layer)
