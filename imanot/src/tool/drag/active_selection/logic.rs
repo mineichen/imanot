@@ -38,22 +38,6 @@ pub(crate) struct ActiveSelectionLogic {
 }
 
 impl ActiveSelectionLogic {
-    /// Fresh (replacing) single-layer selection. `original == committed`.
-    #[cfg(test)]
-    pub(crate) fn fresh_single(
-        idx: usize,
-        ranges: SortedRanges<u32>,
-        background: Option<SortedRanges<u32>>,
-        tip: Option<HistoryAction>,
-    ) -> Self {
-        Self {
-            total: Matrix3::identity(),
-            frame: Frame::around(ranges.roi()),
-            layers: BTreeMap::from([(idx, LayerSelection::fresh(ranges, background))]),
-            tip,
-        }
-    }
-
     pub(crate) fn fresh_from_sorted_ranges_iter(
         first: (usize, LayerSelection),
         parts: impl Iterator<Item = (usize, LayerSelection)>,
@@ -270,7 +254,11 @@ mod tests {
     fn commit_moves_content_and_frame() {
         let (mut masks, original) = mask_with_rect(10, 10);
         let mut logic =
-            ActiveSelectionLogic::fresh_single(0, original, None, masks.last_history_action());
+            ActiveSelectionLogic::fresh_from_sorted_ranges_iter(
+                (0, LayerSelection::fresh(original, None)),
+                std::iter::empty(),
+                masks.last_history_action(),
+            );
         // Advance frame and matrix together, as a finished Move gesture would.
         let (frame, total) = logic.snapshot_transform();
         let delta = Vector2::new(5.0, 0.0);
@@ -296,7 +284,11 @@ mod tests {
     fn commit_offscreen_doesnt_drop_empty_selection() {
         let (mut masks, original) = mask_with_rect(10, 10);
         let mut logic =
-            ActiveSelectionLogic::fresh_single(0, original, None, masks.last_history_action());
+            ActiveSelectionLogic::fresh_from_sorted_ranges_iter(
+                (0, LayerSelection::fresh(original, None)),
+                std::iter::empty(),
+                masks.last_history_action(),
+            );
         // Move fully out of the image: pixels are cleared, but the commit
         // still lands in history, so the logic survives (the tool drops its
         // selection only when `commit` returns `None`).
@@ -323,7 +315,11 @@ mod tests {
         // `tip` together with the rebase.
         let (mut masks, original) = mask_with_rect(0, 0);
         let mut logic =
-            ActiveSelectionLogic::fresh_single(0, original, None, masks.last_history_action());
+            ActiveSelectionLogic::fresh_from_sorted_ranges_iter(
+                (0, LayerSelection::fresh(original, None)),
+                std::iter::empty(),
+                masks.last_history_action(),
+            );
         // Transform + commit: `original` stays pristine, `committed` moves.
         let (frame, total) = logic.snapshot_transform();
         let delta = Vector2::new(5.0, 0.0);
