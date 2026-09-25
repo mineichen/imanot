@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use egui::Vec2;
+use egui::{CursorIcon, Vec2};
 use futures::FutureExt;
 
 use crate::{Tool, ToolContext, ToolFactory};
@@ -21,6 +21,10 @@ impl Tool for PanTool {
         // Panning logic will be moved here from ImageViewer
         let viewer = ctx.viewer;
         let response = &ctx.response;
+
+        if response.dragged() || response.hovered() {
+            ctx.egui.set_cursor_icon(pan_cursor(response.dragged()));
+        }
 
         let drag_delta = response.drag_delta();
         let drag_delta = (drag_delta.x.abs() > f32::EPSILON || drag_delta.y.abs() > f32::EPSILON)
@@ -86,5 +90,19 @@ impl Tool for PanTool {
 
             viewer.set_pan_offset(new_offset);
         }
+    }
+}
+
+/// Open hand when the image can be grabbed, closed hand while panning. Native
+/// Windows has no such cursors — winit maps `Grab`/`Grabbing` to the
+/// four-arrow move cursor there, and egui offers no custom cursor images —
+/// so it keeps the normal arrow, which is less misleading.
+fn pan_cursor(dragging: bool) -> CursorIcon {
+    if cfg!(target_os = "windows") {
+        CursorIcon::Default
+    } else if dragging {
+        CursorIcon::Grabbing
+    } else {
+        CursorIcon::Grab
     }
 }

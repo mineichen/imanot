@@ -10,8 +10,6 @@ use super::frame::{Anchor, Frame, clamp_half, rotate_about, scale_about_frame, s
 pub(super) enum Gesture {
     /// Rect-select in progress (state lives in `RectSelection`).
     Rect(RectSelection),
-    /// Pan in progress (delegated to `PanTool`).
-    Pan,
     /// Move/resize/rotate of the active selection.
     Transform(TransformGesture),
 }
@@ -92,7 +90,8 @@ impl TransformGesture {
     /// Cursor while the gesture runs on the selection's current `frame`.
     pub(super) fn cursor(&self, frame: &Frame) -> CursorIcon {
         match self.kind {
-            TransformKind::Move { .. } | TransformKind::Rotate { .. } => CursorIcon::Grabbing,
+            TransformKind::Move { .. } => CursorIcon::Move,
+            TransformKind::Rotate { .. } => CursorIcon::Grabbing,
             TransformKind::Resize { anchor, .. } => resize_cursor(frame, anchor),
         }
     }

@@ -125,7 +125,9 @@ impl ActiveSelectionLogic {
         self.tip != current
     }
 
-    #[cfg(test)]
+    /// Whether pixel `(x, y)` of `layer` is currently selected (placed).
+    /// Cheap for layers without a selection: the pixel is only looked up
+    /// when `layer` has one.
     pub(crate) fn covers_on_layer(&self, layer: usize, x: u32, y: u32) -> bool {
         self.layers
             .get(&layer)
