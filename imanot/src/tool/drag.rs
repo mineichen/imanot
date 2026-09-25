@@ -225,9 +225,7 @@ impl DragTool {
     /// nothing to undo there. Other gestures just end.
     fn cancel(&mut self, gesture: Gesture) {
         if let (Gesture::Transform(t), Some(sel)) = (gesture, self.selection.as_mut()) {
-            let (base, base_total) = t.base_state();
-            // Restored frame and matrix invalidate the uploaded pixels.
-            sel.restore_gesture(base, base_total);
+            sel.cancel_gesture(t);
         }
     }
 
@@ -271,8 +269,7 @@ impl DragTool {
         // or a corner resize free of the aspect-ratio lock.
         let shift = ctx.egui.input(|i| i.modifiers.shift);
         if let Some(p) = pointer {
-            let (frame, total) = transform.apply(p, shift);
-            sel.set_transform(frame, total);
+            sel.apply_gesture(&transform, p, shift);
         }
         if ctx.response.drag_stopped() || pointer.is_none() {
             self.commit(&mut ctx.image.masks, img_roi);
@@ -545,8 +542,7 @@ mod tests {
     fn drag(tool: &mut DragTool, part: HoverPart, from: Point2<f64>, to: Point2<f64>, shift: bool) {
         let sel = tool.selection.as_mut().unwrap();
         let gesture = TransformGesture::begin(part, from, sel.snapshot_transform()).unwrap();
-        let (frame, total) = gesture.apply(to, shift);
-        sel.set_transform(frame, total);
+        sel.apply_gesture(&gesture, to, shift);
     }
 
     #[test]

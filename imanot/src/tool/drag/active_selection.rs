@@ -1,9 +1,10 @@
 use imask::{Roi, SortedRanges};
-use nalgebra::Matrix3;
+use nalgebra::{Matrix3, Point2};
 
 use crate::{HistoryAction, ImagePainter, MaskImage};
 
 use super::frame::Frame;
+use super::gesture::TransformGesture;
 use overlay::draw_overlay;
 
 pub(crate) mod logic;
@@ -35,7 +36,6 @@ impl ActiveSelection {
     /// not every pixel inside it. Paints the uploaded pixels when they are
     /// still valid, so idle frames cost a single texture draw and no
     /// rasterization.
-
     pub(crate) fn render_selection(
         &mut self,
         egui_ctx: &egui::Context,
@@ -79,15 +79,23 @@ impl ActiveSelection {
         self.logic.snapshot_transform()
     }
 
-    /// Live-gesture update without preview invalidation (see
-    /// [`ActiveSelectionLogic::set_transform`]).
-    pub(crate) fn set_transform(&mut self, frame: Frame, total: Matrix3<f64>) {
+    /// Follow a running transform gesture to `pointer`, without preview
+    /// invalidation (see [`TransformGesture::apply`]).
+    pub(super) fn apply_gesture(
+        &mut self,
+        gesture: &TransformGesture,
+        pointer: Point2<f64>,
+        shift: bool,
+    ) {
+        let (frame, total) = gesture.apply(pointer, shift);
         self.logic.set_transform(frame, total);
     }
 
-    /// Cancelled-gesture restore: revert `frame`+`total` and invalidate the
-    /// uploaded pixels, which were rasterized from the discarded state.
-    pub(crate) fn restore_gesture(&mut self, frame: Frame, total: Matrix3<f64>) {
+    /// Cancel a transform gesture: revert to the frame and matrix it started
+    /// from and invalidate the uploaded pixels, which were rasterized from
+    /// the discarded state.
+    pub(super) fn cancel_gesture(&mut self, gesture: TransformGesture) {
+        let (frame, total) = gesture.base_state();
         self.logic.set_transform(frame, total);
         self.preview.hide();
     }
@@ -145,9 +153,8 @@ impl ActiveSelection {
 mod tests {
     use imask::ImaskSet;
 
-    use nalgebra::{Matrix3, Vector2};
+    use nalgebra::Vector2;
 
-    use super::super::frame::Frame;
     use super::super::test_support::*;
     use super::*;
 
@@ -180,16 +187,11 @@ mod tests {
             ImagePainter::new(ctx.layer_painter(egui::LayerId::background()), screen, 1.0);
         selection.render_transform(&ctx, &mut painter, img_roi(), false);
         assert!(selection.preview.is_visible());
-        // Advance frame and matrix together, as a finished Move gesture would.
-        let (frame, total) = selection.logic.snapshot_transform();
-        let delta = Vector2::new(5.0, 0.0);
-        selection.set_transform(
-            Frame {
-                center: frame.center + delta,
-                ..frame
-            },
-            total * Matrix3::new_translation(&delta),
-        );
+        // Move by 5px, as a finished Move gesture would.
+        let (frame, total) = selection.snapshot_transform();
+        let press = frame.center;
+        let gesture = TransformGesture::begin(HoverPart::Inside, press, (frame, total)).unwrap();
+        selection.apply_gesture(&gesture, press + Vector2::new(5.0, 0.0), false);
         let selection = selection
             .commit_transform(&mut masks, img_roi())
             .expect("moved commit survives");
