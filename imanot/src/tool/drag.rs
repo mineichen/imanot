@@ -22,7 +22,7 @@ mod transform;
 mod test_support;
 
 use active_selection::ActiveSelection;
-use gesture::{Gesture, GestureMove, GestureResize, GestureRotate};
+use gesture::{Gesture, TransformGesture};
 // use overlay::{HoverPart, hit_test, resize_cursor};
 use transform::{clamp_pixel, cluster_at};
 
@@ -212,26 +212,11 @@ impl DragTool {
             // No selection: rect-select, or pan on empty space.
             return Some(self.start_empty_space_gesture(ctx, pointer, img_w, img_h));
         };
-        let (frame, total) = s.snapshot_transform();
+        let part = active_selection::hit_test(&*ctx.painter, press_screen, s.frame());
         Some(
-            match active_selection::hit_test(&*ctx.painter, press_screen, &frame) {
-                HoverPart::Outside => self.start_empty_space_gesture(ctx, pointer, img_w, img_h),
-                HoverPart::Inside => Gesture::Move(GestureMove {
-                    start: press,
-                    base: frame,
-                    base_total: total,
-                }),
-                HoverPart::Anchor(anchor) => Gesture::Resize(GestureResize {
-                    anchor,
-                    start: press,
-                    base: frame,
-                    base_total: total,
-                }),
-                HoverPart::Rotate => Gesture::Rotate(GestureRotate {
-                    start_angle: (press.y - frame.center.y).atan2(press.x - frame.center.x),
-                    base: frame,
-                    base_total: total,
-                }),
+            match TransformGesture::begin(part, press, s.snapshot_transform()) {
+                Some(transform) => Gesture::Transform(transform),
+                None => self.start_empty_space_gesture(ctx, pointer, img_w, img_h),
             },
         )
     }
@@ -266,11 +251,7 @@ impl DragTool {
     /// Cursor for the current hover/gesture state.
     fn hover_cursor(&self, ctx: &ToolContext, pointer_screen: Option<Pos2>) {
         let icon = match (&self.gesture, self.selection.as_ref(), pointer_screen) {
-            (Some(Gesture::Move(_)), _, _) => CursorIcon::Grabbing,
-            (Some(Gesture::Resize(g)), Some(sel), _) => {
-                active_selection::resize_cursor(sel.frame(), g.anchor)
-            }
-            (Some(Gesture::Rotate(_)), _, _) => CursorIcon::Grabbing,
+            (Some(Gesture::Transform(t)), Some(sel), _) => t.cursor(sel.frame()),
             (Some(Gesture::Pan), _, _) => CursorIcon::AllScroll,
             (Some(Gesture::Rect(_)), _, _) => CursorIcon::Crosshair,
             (None, Some(sel), Some(p)) => {
@@ -327,9 +308,8 @@ impl Tool for DragTool {
                 // Cancelled gestures revert to the pre-gesture frame and
                 // matrix; the mask was never touched, so there is nothing to
                 // undo there.
-                if let (Some((base, base_total)), Some(sel)) =
-                    (gesture.base_state(), self.selection.as_mut())
-                {
+                if let (Gesture::Transform(t), Some(sel)) = (gesture, self.selection.as_mut()) {
+                    let (base, base_total) = t.base_state();
                     // Restored frame and matrix invalidate the uploaded pixels.
                     sel.restore_gesture(base, base_total);
                 }
@@ -389,23 +369,22 @@ impl Tool for DragTool {
                     s.render_selection(ctx.egui, ctx.painter, img_roi);
                 }
             }
-            Some(g @ (Gesture::Move(_) | Gesture::Resize(_) | Gesture::Rotate(_))) => {
+            Some(Gesture::Transform(g)) => {
                 *ctx.postpone_new_images = true;
                 // Shift alters the active gesture: exact unsnapped rotation
                 // angles, or a corner resize free of the aspect-ratio lock.
                 let shift = ctx.egui.input(|i| i.modifiers.shift);
                 if let Some(p) = pointer.map(|p| Point2::new(p.x as f64, p.y as f64))
                     && let Some(sel) = self.selection.as_mut()
-                    && let Some((frame, total)) = g.apply(p, shift)
                 {
+                    let (frame, total) = g.apply(p, shift);
                     sel.set_transform(frame, total);
                 }
                 if ctx.response.drag_stopped() || pointer.is_none() {
                     self.commit(&mut ctx.image.masks, img_roi);
                     return;
                 } else if let Some(sel) = self.selection.as_mut() {
-                    let moved = matches!(self.gesture, Some(Gesture::Move(_)));
-                    sel.render_transform(ctx.egui, &mut *ctx.painter, img_roi, moved);
+                    sel.render_transform(ctx.egui, &mut *ctx.painter, img_roi, g.is_move());
                 }
                 self.hover_cursor(&ctx, pointer_screen);
             }
@@ -534,17 +513,16 @@ mod tests {
     /// Simulate a Move gesture from `from` to `to` through the real update
     /// path (frame and matrix stay in sync by construction).
     fn drag_move(tool: &mut DragTool, from: Point2<f64>, to: Point2<f64>) {
+        drag(tool, HoverPart::Inside, from, to, false);
+    }
+
+    /// Run a transform gesture on `part` from `from` to `to` through the
+    /// real update path (frame and matrix stay in sync by construction).
+    fn drag(tool: &mut DragTool, part: HoverPart, from: Point2<f64>, to: Point2<f64>, shift: bool) {
         let sel = tool.selection.as_mut().unwrap();
-        let (frame, total) = sel.snapshot_transform();
-        let gesture = Gesture::Move(GestureMove {
-            start: from,
-            base: frame,
-            base_total: total,
-        });
-        let (frame, total) = gesture.apply(to, false).unwrap();
+        let gesture = TransformGesture::begin(part, from, sel.snapshot_transform()).unwrap();
+        let (frame, total) = gesture.apply(to, shift);
         sel.set_transform(frame, total);
-        tool.gesture = Some(gesture);
-        tool.gesture = None;
     }
 
     #[test]
@@ -557,15 +535,12 @@ mod tests {
         let mut tool = DragTool::default();
         select_rect_block(&mut tool, &masks, 10, 10);
         let sel = tool.selection.as_mut().unwrap();
-        let (frame, total) = sel.snapshot_transform();
-        let gesture = Gesture::Move(GestureMove {
-            start: Point2::new(12.5, 12.5),
-            base: frame,
-            base_total: total,
-        });
-        let (frame, total) = gesture.apply(Point2::new(17.5, 12.5), false).unwrap();
+        let start = Point2::new(12.5, 12.5);
+        let gesture =
+            TransformGesture::begin(HoverPart::Inside, start, sel.snapshot_transform()).unwrap();
+        let (frame, total) = gesture.apply(Point2::new(17.5, 12.5), false);
         sel.set_transform(frame, total);
-        tool.gesture = Some(gesture);
+        tool.gesture = Some(Gesture::Transform(gesture));
         tool.commit(&mut masks, img_roi());
         assert!(
             tool.gesture.is_none(),
@@ -739,9 +714,9 @@ mod tests {
         let union = ranges_from_spans(vec![Span::new(0..2, 0u32), Span::new(5..7, 3u32)]).unwrap();
         let (frame, _) = tool.selection.as_ref().unwrap().snapshot_transform();
         let east = frame.point(Vector2::new(frame.half.x, 0.0));
-        drag_resize(
+        drag(
             &mut tool,
-            Anchor::E,
+            HoverPart::Anchor(Anchor::E),
             east,
             Point2::new(east.x + frame.half.x, east.y),
             false,
@@ -755,33 +730,6 @@ mod tests {
         let pixels = layer_pixels(&masks).unwrap();
         assert!(pixels.spans::<u32>().any(|s| s.y == 0));
         assert!(tool.selection.is_some());
-    }
-
-    /// Simulate a Resize gesture from `from` to `to` through the real update
-    /// path (frame and matrix stay in sync by construction). `shift`
-    /// mirrors holding Shift: exact angles, and corner resizes free of the
-    /// aspect-ratio lock.
-    fn drag_resize(
-        tool: &mut DragTool,
-        anchor: Anchor,
-        from: Point2<f64>,
-        to: Point2<f64>,
-        shift: bool,
-    ) {
-        let sel = tool.selection.as_mut().unwrap();
-        let (frame, total) = sel.snapshot_transform();
-
-        let gesture = Gesture::Resize(GestureResize {
-            anchor,
-            start: from,
-            base: frame,
-            base_total: total,
-        });
-
-        let (frame, total) = gesture.apply(to, shift).unwrap();
-        sel.set_transform(frame, total);
-        tool.gesture = Some(gesture);
-        tool.gesture = None;
     }
 
     fn mask_with_three_layers() -> MaskImage {

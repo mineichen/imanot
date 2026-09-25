@@ -167,13 +167,12 @@ mod tests {
         // Dropping the selection at a new position must not re-rasterize:
         // the placed pixels are exactly what the preview already shows.
         let (mut masks, block, outsiders) = mask_with_outsiders();
-        let mut selection = ActiveSelection::from_logic(
-            ActiveSelectionLogic::fresh_from_sorted_ranges_iter(
+        let mut selection =
+            ActiveSelection::from_logic(ActiveSelectionLogic::fresh_from_sorted_ranges_iter(
                 (0, LayerSelection::fresh(block, Some(outsiders))),
                 std::iter::empty(),
                 masks.last_history_action(),
-            ),
-        );
+            ));
         let ctx = egui::Context::default();
         let screen =
             egui::Rect::from_min_max(egui::Pos2::new(0.0, 0.0), egui::Pos2::new(100.0, 100.0));
