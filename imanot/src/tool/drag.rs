@@ -23,7 +23,6 @@ mod test_support;
 
 use active_selection::ActiveSelection;
 use gesture::{Gesture, TransformGesture};
-// use overlay::{HoverPart, hit_test, resize_cursor};
 use transform::{clamp_pixel, cluster_at};
 
 /// Drag-select + transform tool. See `DRAG_TOOL_REFINED.md` for the full plan.
@@ -64,16 +63,8 @@ impl DragTool {
         })
     }
 
-    /// Drop the whole selection (no box left to show). The preview dies with
-    /// it; any in-progress gesture is dropped too.
-    fn drop_selection(&mut self) {
-        self.selection = None;
-        self.gesture = None;
-    }
-
     /// Empty-space interaction: pan when `pan_on_drag` is set and no layer
-    /// covers the cursor, else start a rect selection. Returns true when
-    /// panning, in which case the caller must delegate to `PanTool`.
+    /// covers the cursor, else start a rect selection.
     fn start_empty_space_gesture(
         &self,
         ctx: &mut ToolContext,
@@ -167,6 +158,7 @@ impl DragTool {
             .map(|(idx, area)| (idx, area.pixels.clone(), None));
 
         self.select_internal(masks, false, selected);
+        self.gesture = None;
     }
 
     fn select_internal<'m>(
@@ -188,24 +180,21 @@ impl DragTool {
                 ));
             }
         } else {
-            self.drop_selection();
+            // No box left to show; the preview dies with the selection.
+            self.selection = None;
         }
     }
-    /// Decide what a fresh drag does and store it in `self.gesture`.
+
+    /// Decide what a fresh drag does.
     /// Hit-testing and gesture origins use the PRESS position: with click +
     /// drag sensing, `drag_started()` only fires after the pointer moved past
     /// `max_click_dist`, so the current position may already have left small
     /// hit targets (anchors, rotate handle).
-    /// Returns true if the caller must delegate the whole interaction to
-    /// `PanTool` (pan gesture, consumes `ctx`).
     fn begin_gesture(&self, ctx: &mut ToolContext, img_w: usize, img_h: usize) -> Option<Gesture> {
         let press_screen = ctx
             .response
             .interact_pointer_pos()
-            .map(|cur| cur - ctx.response.total_drag_delta().unwrap_or(Vec2::ZERO));
-        let Some(press_screen) = press_screen else {
-            return None;
-        };
+            .map(|cur| cur - ctx.response.total_drag_delta().unwrap_or(Vec2::ZERO))?;
         let pointer = ctx.painter.screen_to_image(press_screen);
         let press = Point2::new(pointer.x as f64, pointer.y as f64);
         let Some(s) = self.selection.as_ref() else {
@@ -223,16 +212,103 @@ impl DragTool {
 
     /// Commit the current transform (see [`ActiveSelection::commit_transform`]).
     /// If nothing remains visible, the selection is dropped — an empty box is
-    /// never shown. Either way the in-progress gesture ends on mouseup, so it
-    /// is always settled: otherwise the tool stays stuck in the transform
-    /// branch and re-commits the old gesture every frame.
+    /// never shown.
     fn commit(&mut self, masks: &mut MaskImage, img_roi: Roi<u32>) {
-        if let Some(sel) = self.selection.take() {
-            if let Some(sel) = sel.commit_transform(masks, img_roi) {
-                self.selection = Some(sel);
-            }
-            self.gesture = None;
-        };
+        self.selection = self
+            .selection
+            .take()
+            .and_then(|sel| sel.commit_transform(masks, img_roi));
+    }
+
+    /// Escape on a running gesture: a cancelled transform reverts to the
+    /// pre-gesture frame and matrix; the mask was never touched, so there is
+    /// nothing to undo there. Other gestures just end.
+    fn cancel(&mut self, gesture: Gesture) {
+        if let (Gesture::Transform(t), Some(sel)) = (gesture, self.selection.as_mut()) {
+            let (base, base_total) = t.base_state();
+            // Restored frame and matrix invalidate the uploaded pixels.
+            sel.restore_gesture(base, base_total);
+        }
+    }
+
+    /// Rect-select step: selects on release (Shift adds instead of
+    /// replacing) and ends; otherwise keeps the rubber band running.
+    fn step_rect(
+        &mut self,
+        mut rect: RectSelection,
+        ctx: &mut ToolContext,
+        img_roi: Roi<u32>,
+    ) -> Option<Gesture> {
+        if let Some(result) = rect.drag_finished(ctx) {
+            let additive = ctx.egui.input(|i| i.modifiers.shift);
+            self.select_rect(&ctx.image.masks, Roi::from(result.rect()), additive);
+            return None;
+        }
+        if !ctx.response.dragged() {
+            return None;
+        }
+        // A shift-held rubber band keeps the existing selection: keep
+        // showing its highlight underneath (cheap repaint of the live
+        // texture; nothing to show after a replacing drag dropped it).
+        if let Some(s) = self.selection.as_mut() {
+            s.render_selection(ctx.egui, ctx.painter, img_roi);
+        }
+        Some(Gesture::Rect(rect))
+    }
+
+    /// Transform step: follow the pointer, and commit on mouseup (or when
+    /// the pointer is gone), which ends the gesture.
+    fn step_transform(
+        &mut self,
+        transform: TransformGesture,
+        ctx: &mut ToolContext,
+        pointer: Option<Point2<f64>>,
+        img_roi: Roi<u32>,
+    ) -> Option<Gesture> {
+        *ctx.postpone_new_images = true;
+        let sel = self.selection.as_mut()?;
+        // Shift alters the active gesture: exact unsnapped rotation angles,
+        // or a corner resize free of the aspect-ratio lock.
+        let shift = ctx.egui.input(|i| i.modifiers.shift);
+        if let Some(p) = pointer {
+            let (frame, total) = transform.apply(p, shift);
+            sel.set_transform(frame, total);
+        }
+        if ctx.response.drag_stopped() || pointer.is_none() {
+            self.commit(&mut ctx.image.masks, img_roi);
+            return None;
+        }
+        sel.render_transform(ctx.egui, &mut *ctx.painter, img_roi, transform.is_move());
+        ctx.egui.set_cursor_icon(transform.cursor(sel.frame()));
+        Some(Gesture::Transform(transform))
+    }
+
+    /// No gesture running: a drag start begins one, a click (Shift adds)
+    /// selects the cluster under the pointer.
+    fn step_idle(
+        &mut self,
+        ctx: &mut ToolContext,
+        pointer: Option<Pos2>,
+        pointer_screen: Option<Pos2>,
+        img_roi: Roi<u32>,
+    ) -> Option<Gesture> {
+        let img_w = img_roi.width().get() as usize;
+        let img_h = img_roi.height().get() as usize;
+        let gesture = ctx
+            .response
+            .drag_started()
+            .then(|| self.begin_gesture(ctx, img_w, img_h))
+            .flatten();
+        if ctx.response.clicked()
+            && !ctx.response.drag_stopped()
+            && let Some(p) = pointer
+        {
+            let additive = ctx.egui.input(|i| i.modifiers.shift);
+            self.click_select(&mut ctx.image.masks, p, img_roi, additive);
+        } else {
+            self.hover_cursor(ctx, gesture.as_ref(), pointer_screen);
+        }
+        gesture
     }
 
     /// Delete all ranges in the current selection: Clear the currently placed
@@ -248,17 +324,22 @@ impl DragTool {
         };
     }
 
-    /// Cursor for the current hover/gesture state.
-    fn hover_cursor(&self, ctx: &ToolContext, pointer_screen: Option<Pos2>) {
-        let icon = match (&self.gesture, self.selection.as_ref(), pointer_screen) {
+    /// Cursor for the hover state, or for a `gesture` that just began.
+    fn hover_cursor(
+        &self,
+        ctx: &ToolContext,
+        gesture: Option<&Gesture>,
+        pointer_screen: Option<Pos2>,
+    ) {
+        let icon = match (gesture, self.selection.as_ref(), pointer_screen) {
             (Some(Gesture::Transform(t)), Some(sel), _) => t.cursor(sel.frame()),
             (Some(Gesture::Pan), _, _) => CursorIcon::AllScroll,
             (Some(Gesture::Rect(_)), _, _) => CursorIcon::Crosshair,
             (None, Some(sel), Some(p)) => {
-                match active_selection::hit_test(&*ctx.painter, p, &sel.frame()) {
+                match active_selection::hit_test(&*ctx.painter, p, sel.frame()) {
                     HoverPart::Outside => return,
                     HoverPart::Inside => CursorIcon::Move,
-                    HoverPart::Anchor(a) => active_selection::resize_cursor(&sel.frame(), a),
+                    HoverPart::Anchor(a) => active_selection::resize_cursor(sel.frame(), a),
                     HoverPart::Rotate => CursorIcon::Grab,
                 }
             }
@@ -303,119 +384,62 @@ where
 
 impl Tool for DragTool {
     fn handle_interaction(&mut self, mut ctx: ToolContext) {
-        if ctx.egui.input(|i| i.key_pressed(egui::Key::Escape)) {
-            if let Some(gesture) = self.gesture.take() {
-                // Cancelled gestures revert to the pre-gesture frame and
-                // matrix; the mask was never touched, so there is nothing to
-                // undo there.
-                if let (Gesture::Transform(t), Some(sel)) = (gesture, self.selection.as_mut()) {
-                    let (base, base_total) = t.base_state();
-                    // Restored frame and matrix invalidate the uploaded pixels.
-                    sel.restore_gesture(base, base_total);
-                }
-            } else {
-                self.drop_selection();
+        // Escape cancels a running gesture, or drops the idle selection.
+        let escape = ctx.egui.input(|i| i.key_pressed(egui::Key::Escape));
+        let gesture = match self.gesture.take() {
+            gesture if !escape => gesture,
+            Some(gesture) => {
+                self.cancel(gesture);
+                None
             }
-        }
-
-        if let Some(sel) = self.selection.take() {
-            let masks = &ctx.image.masks;
-            let stale = sel.is_stale(masks.last_history_action());
-            if stale {
-                self.gesture = None;
+            None => {
+                self.selection = None;
+                None
             }
+        };
 
-            const KEYS: [egui::Key; 2] = [egui::Key::Delete, egui::Key::Backspace];
-            if ctx.egui.input(|i| KEYS.iter().any(|x| i.key_pressed(*x))) {
-                self.gesture = None;
-                sel.delete_all(&mut ctx.image.masks);
-            } else {
-                *ctx.postpone_new_images = true;
-                self.selection = Some(sel);
-            }
-        }
+        // Delete removes the selection; a stale one (history changed
+        // underneath) ends the gesture that started from it.
+        const DELETE_KEYS: [egui::Key; 2] = [egui::Key::Delete, egui::Key::Backspace];
+        let delete = ctx
+            .egui
+            .input(|i| DELETE_KEYS.iter().any(|k| i.key_pressed(*k)));
+        let gesture = if delete && let Some(sel) = self.selection.take() {
+            sel.delete_all(&mut ctx.image.masks);
+            None
+        } else if let Some(sel) = &self.selection {
+            *ctx.postpone_new_images = true;
+            gesture.filter(|_| !sel.is_stale(ctx.image.masks.last_history_action()))
+        } else {
+            gesture
+        };
 
-        let (w_nz, h_nz) = ctx.image.image.adjust.dimensions();
-        let img_w = w_nz.get() as usize;
-        let img_h = h_nz.get() as usize;
-        let img_roi = Roi::from_dimensions(w_nz, h_nz);
+        let img_roi = {
+            let (w, h) = ctx.image.image.adjust.dimensions();
+            Roi::from_dimensions(w, h)
+        };
         let pointer_screen = ctx
             .response
             .interact_pointer_pos()
             .or_else(|| ctx.response.hover_pos());
         let pointer = pointer_screen.map(|p| ctx.painter.screen_to_image(p));
 
-        match &mut self.gesture {
-            Some(Gesture::Pan) => {
-                if ctx.response.drag_stopped() {
-                    self.gesture = None;
-                }
-                return;
+        let gesture = match gesture {
+            Some(Gesture::Pan) => (!ctx.response.drag_stopped()).then_some(Gesture::Pan),
+            Some(Gesture::Rect(rect)) => self.step_rect(rect, &mut ctx, img_roi),
+            Some(Gesture::Transform(transform)) => {
+                let pointer = pointer.map(|p| Point2::new(p.x as f64, p.y as f64));
+                self.step_transform(transform, &mut ctx, pointer, img_roi)
             }
-            Some(Gesture::Rect(rect_selection)) => {
-                if let Some(result) = rect_selection.drag_finished(&mut ctx) {
-                    // Shift on release adds to the selection instead of
-                    // replacing it.
-                    let additive = ctx.egui.input(|i| i.modifiers.shift);
-                    self.select_rect(&ctx.image.masks, Roi::from(result.rect()), additive);
-                    self.gesture = None;
-                } else if !ctx.response.dragged() {
-                    self.gesture = None;
-                }
-                // A shift-held rubber band keeps the existing selection: keep
-                // showing its highlight underneath (cheap repaint of the live
-                // texture; nothing to show after a replacing drag dropped it).
-                if let Some(s) = self.selection.as_mut() {
-                    s.render_selection(ctx.egui, ctx.painter, img_roi);
-                }
-            }
-            Some(Gesture::Transform(g)) => {
-                *ctx.postpone_new_images = true;
-                // Shift alters the active gesture: exact unsnapped rotation
-                // angles, or a corner resize free of the aspect-ratio lock.
-                let shift = ctx.egui.input(|i| i.modifiers.shift);
-                if let Some(p) = pointer.map(|p| Point2::new(p.x as f64, p.y as f64))
-                    && let Some(sel) = self.selection.as_mut()
-                {
-                    let (frame, total) = g.apply(p, shift);
-                    sel.set_transform(frame, total);
-                }
-                if ctx.response.drag_stopped() || pointer.is_none() {
-                    self.commit(&mut ctx.image.masks, img_roi);
-                    return;
-                } else if let Some(sel) = self.selection.as_mut() {
-                    sel.render_transform(ctx.egui, &mut *ctx.painter, img_roi, g.is_move());
-                }
-                self.hover_cursor(&ctx, pointer_screen);
-            }
-            None => {
-                if ctx.response.drag_started()
-                    && let Some(new_gest) = self.begin_gesture(&mut ctx, img_w, img_h)
-                {
-                    self.gesture = Some(new_gest);
-                }
-                if ctx.response.clicked()
-                    && !ctx.response.drag_stopped()
-                    && let Some(p) = pointer
-                {
-                    // Shift-click adds the cluster to the selection instead of
-                    // replacing it.
-                    let additive = ctx.egui.input(|i| i.modifiers.shift);
-                    self.click_select(&mut ctx.image.masks, p, img_roi, additive);
-                } else {
-                    self.hover_cursor(&ctx, pointer_screen);
-                }
-            }
-        }
+            None => self.step_idle(&mut ctx, pointer, pointer_screen, img_roi),
+        };
 
-        if self.gesture.is_none()
+        if gesture.is_none()
             && let Some(s) = self.selection.as_mut()
         {
             s.render_selection(ctx.egui, &mut *ctx.painter, img_roi);
         }
-        // if self.selection.is_some() {
-        //     *ctx.postpone_new_images = true;
-        // }
+        self.gesture = gesture;
     }
 }
 
@@ -526,26 +550,15 @@ mod tests {
     }
 
     #[test]
-    fn commit_drops_gesture_after_mouseup() {
-        // Mouseup ends the transform gesture: the commit keeps the selection
-        // (idle, for further gestures) but must drop the in-progress gesture.
-        // Otherwise the tool stays stuck in the Move branch and re-commits or
-        // re-renders the old gesture on every following frame.
+    fn commit_keeps_selection_after_move() {
+        // Mouseup commits the transform and keeps the selection idle for
+        // further gestures. (The gesture itself ends because the transform
+        // step returns `None` on mouseup.)
         let mut masks = mask_with_rect(10, 10);
         let mut tool = DragTool::default();
         select_rect_block(&mut tool, &masks, 10, 10);
-        let sel = tool.selection.as_mut().unwrap();
-        let start = Point2::new(12.5, 12.5);
-        let gesture =
-            TransformGesture::begin(HoverPart::Inside, start, sel.snapshot_transform()).unwrap();
-        let (frame, total) = gesture.apply(Point2::new(17.5, 12.5), false);
-        sel.set_transform(frame, total);
-        tool.gesture = Some(Gesture::Transform(gesture));
+        drag_move(&mut tool, Point2::new(12.5, 12.5), Point2::new(17.5, 12.5));
         tool.commit(&mut masks, img_roi());
-        assert!(
-            tool.gesture.is_none(),
-            "gesture must be dropped after mouseup commit"
-        );
         assert!(
             tool.selection.is_some(),
             "selection stays idle after a successful move"
