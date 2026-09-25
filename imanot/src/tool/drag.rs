@@ -9,7 +9,7 @@ use imask::{ImageDimension, ImaskSet, Roi, SortedRanges, SortedRangesTightSpanBu
 use nalgebra::Point2;
 
 use crate::{
-    AffectedLayer, MaskImage, PixelArea, RectSelection, Tool, ToolContext, ToolFactory,
+    AffectedLayer, MaskImage, PanTool, PixelArea, RectSelection, Tool, ToolContext, ToolFactory,
     tool::drag::active_selection::{ActiveSelectionLogic, HoverPart, LayerSelection},
 };
 
@@ -63,24 +63,24 @@ impl DragTool {
         })
     }
 
-    /// Empty-space interaction: pan when `pan_on_drag` is set and no layer
-    /// covers the cursor, else start a rect selection.
+    /// Empty-space interaction: no gesture (the drag pans, see
+    /// `handle_interaction`) when `pan_on_drag` is set and no layer covers
+    /// the cursor, else start a rect selection.
     fn start_empty_space_gesture(
         &self,
         ctx: &mut ToolContext,
         pointer: Pos2,
         img_w: usize,
         img_h: usize,
-    ) -> Gesture {
+    ) -> Option<Gesture> {
         if self.pan_on_drag {
             let (x, y) = clamp_pixel(pointer, img_w, img_h);
-            if ctx.image.masks.find_layer_at((x, y)).is_none() {
-                return Gesture::Pan;
-            }
+            // No layer under the cursor: no gesture, pan.
+            ctx.image.masks.find_layer_at((x, y))?;
         }
         let mut selection = RectSelection::default();
         let _ = selection.drag_finished(ctx);
-        Gesture::Rect(selection)
+        Some(Gesture::Rect(selection))
     }
 
     /// Click: select the cluster under the cursor (8-connected component of
@@ -199,15 +199,26 @@ impl DragTool {
         let press = Point2::new(pointer.x as f64, pointer.y as f64);
         let Some(s) = self.selection.as_ref() else {
             // No selection: rect-select, or pan on empty space.
-            return Some(self.start_empty_space_gesture(ctx, pointer, img_w, img_h));
+            return self.start_empty_space_gesture(ctx, pointer, img_w, img_h);
         };
-        let part = active_selection::hit_test(&*ctx.painter, press_screen, s.frame());
-        Some(
-            match TransformGesture::begin(part, press, s.snapshot_transform()) {
-                Some(transform) => Gesture::Transform(transform),
-                None => self.start_empty_space_gesture(ctx, pointer, img_w, img_h),
-            },
-        )
+        let part = match active_selection::hit_test(&*ctx.painter, press_screen, s.frame()) {
+            // Inside the frame, only a selected pixel grabs the selection.
+            HoverPart::Inside if !self.hovers_selected(ctx, pointer) => HoverPart::Outside,
+            part => part,
+        };
+        match TransformGesture::begin(part, press, s.snapshot_transform()) {
+            Some(transform) => Some(Gesture::Transform(transform)),
+            None => self.start_empty_space_gesture(ctx, pointer, img_w, img_h),
+        }
+    }
+
+    /// Whether the hovered layer's pixel at `pointer` is selected; the pixel
+    /// is only looked up when a layer is hovered.
+    fn hovers_selected(&self, ctx: &ToolContext, pointer: Pos2) -> bool {
+        let (Some(sel), Some(layer)) = (&self.selection, ctx.image.masks.hover_layer()) else {
+            return false;
+        };
+        sel.covers_on_layer(layer, pointer.x as u32, pointer.y as u32)
     }
 
     /// Commit the current transform (see [`ActiveSelection::commit_transform`]).
@@ -330,14 +341,20 @@ impl DragTool {
     ) {
         let icon = match (gesture, self.selection.as_ref(), pointer_screen) {
             (Some(Gesture::Transform(t)), Some(sel), _) => t.cursor(sel.frame()),
-            (Some(Gesture::Pan), _, _) => CursorIcon::AllScroll,
             (Some(Gesture::Rect(_)), _, _) => CursorIcon::Crosshair,
-            (None, Some(sel), Some(p)) => {
-                match active_selection::hit_test(&*ctx.painter, p, sel.frame()) {
-                    HoverPart::Outside => return,
-                    HoverPart::Inside => CursorIcon::Move,
-                    HoverPart::Anchor(a) => active_selection::resize_cursor(sel.frame(), a),
-                    HoverPart::Rotate => CursorIcon::Grab,
+            // Not on a drag start: `begin_gesture` already hit-tested.
+            (None, sel, Some(p)) if !ctx.response.drag_started() => {
+                let frame = sel.map(ActiveSelection::frame);
+                match frame.map(|f| (f, active_selection::hit_test(&*ctx.painter, p, f))) {
+                    Some((f, HoverPart::Anchor(a))) => active_selection::resize_cursor(f, a),
+                    Some((_, HoverPart::Rotate)) => CursorIcon::Grab,
+                    _ if self.hovers_selected(ctx, ctx.painter.screen_to_image(p)) => {
+                        CursorIcon::Move
+                    }
+                    _ if (ctx.image.masks.hover_layer()).is_some_and(|l| self.layer.affects(l)) => {
+                        CursorIcon::PointingHand
+                    }
+                    _ => return,
                 }
             }
             _ => return,
@@ -428,7 +445,6 @@ impl Tool for DragTool {
         let pointer = pointer_screen.map(|p| ctx.painter.screen_to_image(p));
 
         let gesture = match gesture {
-            Some(Gesture::Pan) => (!ctx.response.drag_stopped()).then_some(Gesture::Pan),
             Some(Gesture::Rect(rect)) => self.step_rect(rect, &mut ctx, img_roi),
             Some(Gesture::Transform(transform)) => {
                 let pointer = pointer.map(|p| Point2::new(p.x as f64, p.y as f64));
@@ -443,6 +459,12 @@ impl Tool for DragTool {
             s.render_selection(ctx.egui, &mut *ctx.painter, img_roi);
         }
         self.gesture = gesture;
+
+        // With `pan_on_drag`, a drag on empty space starts no gesture and
+        // pans. Consumes `ctx`, so it comes last.
+        if self.pan_on_drag && self.gesture.is_none() && ctx.response.dragged() {
+            PanTool::default().handle_interaction(ctx);
+        }
     }
 }
 
