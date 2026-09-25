@@ -105,7 +105,7 @@ impl ActiveSelection {
         self.logic.is_stale(current)
     }
 
-    #[cfg(test)]
+    /// See [`ActiveSelectionLogic::covers_on_layer`].
     pub(crate) fn covers_on_layer(&self, layer: usize, x: u32, y: u32) -> bool {
         self.logic.covers_on_layer(layer, x, y)
     }
