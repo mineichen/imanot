@@ -395,21 +395,27 @@ impl Tool for DragTool {
             }
         };
 
-        // Delete removes the selection; a stale one (history changed
-        // underneath) ends the gesture that started from it.
+        // A stale selection (history changed underneath: undo, redo or
+        // another tool's commit) no longer matches the mask, so it is dropped
+        // together with its gesture — before Delete could clear pixels from
+        // the outdated snapshot. Delete removes a live selection.
         const DELETE_KEYS: [egui::Key; 2] = [egui::Key::Delete, egui::Key::Backspace];
         let delete = ctx
             .egui
             .input(|i| DELETE_KEYS.iter().any(|k| i.key_pressed(*k)));
-        let gesture = if delete && let Some(sel) = self.selection.take() {
-            sel.delete_all(&mut ctx.image.masks);
-            None
-        } else if let Some(sel) = &self.selection {
-            *ctx.postpone_new_images = true;
-            gesture.filter(|_| !sel.is_stale(ctx.image.masks.last_history_action()))
-        } else {
-            gesture
+        let (selection, gesture) = match self.selection.take() {
+            Some(sel) if sel.is_stale(ctx.image.masks.last_history_action()) => (None, None),
+            Some(sel) if delete => {
+                sel.delete_all(&mut ctx.image.masks);
+                (None, None)
+            }
+            Some(sel) => {
+                *ctx.postpone_new_images = true;
+                (Some(sel), gesture)
+            }
+            None => (None, gesture),
         };
+        self.selection = selection;
 
         let img_roi = {
             let (w, h) = ctx.image.image.adjust.dimensions();
