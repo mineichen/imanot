@@ -84,21 +84,6 @@ impl DragToolSettings {
         mut selection: Option<ActiveSelection>,
         mut gesture: Option<Gesture>,
     ) -> (Option<ActiveSelection>, Option<Gesture>) {
-        // Escape cancels a running gesture, or drops the idle selection. A
-        // cancelled transform reverts to the pre-gesture frame and matrix;
-        // the mask was never touched, so there is nothing to undo there.
-        // Other gestures just end.
-        if ctx.egui.input(|i| i.key_pressed(egui::Key::Escape)) {
-            (selection, gesture) = match (selection, gesture) {
-                (Some(mut sel), Some(Gesture::Transform(t))) => {
-                    sel.cancel_gesture(t);
-                    (Some(sel), None)
-                }
-                (selection, Some(_)) => (selection, None),
-                (_, None) => (None, None),
-            };
-        }
-
         if let Some(sel) = selection.take() {
             *ctx.postpone_new_images = true;
             const DELETE_KEYS: [egui::Key; 2] = [egui::Key::Delete, egui::Key::Backspace];
@@ -118,6 +103,20 @@ impl DragToolSettings {
                 Some(sel)
             }
         };
+        // Escape cancels a running gesture, or drops the idle selection. A
+        // cancelled transform reverts to the pre-gesture frame and matrix;
+        // the mask was never touched, so there is nothing to undo there.
+        // Other gestures just end.
+        if ctx.egui.input(|i| i.key_pressed(egui::Key::Escape)) {
+            (selection, gesture) = match (selection, gesture) {
+                (Some(mut sel), Some(Gesture::Transform(t))) => {
+                    sel.cancel_gesture(t);
+                    (Some(sel), None)
+                }
+                (selection, Some(_)) => (selection, None),
+                (_, None) => (None, None),
+            };
+        }
 
         let img_roi = {
             let (w, h) = ctx.image.image.adjust.dimensions();
