@@ -164,7 +164,7 @@ impl ActiveSelectionLogic {
             .layers
             .iter_mut()
             .map(|(idx, ls)| {
-                let new = transform_layer(ls.original(), &matrix, img_roi);
+                let new = transform_layer(ls.original().spans(), &matrix, img_roi);
                 is_unchanged &= new.as_ref() == Some(&ls.committed);
                 (idx, ls, new)
             })
@@ -247,16 +247,17 @@ mod tests {
     use super::super::super::test_support::*;
     use super::*;
 
-    fn mask_with_rect(x: u32, y: u32) -> (MaskImage, SortedRanges<u32>) {
-        let original = rect_ranges(x, y, nz(5), nz(5));
-        (mask(original.clone()), original)
+    fn mask_with_rect(x: u16, y: u16) -> (MaskImage, Roi<u16>) {
+        let (xu32, yu32) = (u32::from(x), u32::from(y));
+        let original = Roi::<u32>::new(xu32..xu32 + 5, yu32..yu32 + 5);
+        (mask(original.into_spans()), Roi::new(x..x + 5, y..y + 5))
     }
 
     #[test]
     fn commit_moves_content_and_frame() {
         let (mut masks, original) = mask_with_rect(10, 10);
         let mut logic = ActiveSelectionLogic::fresh_from_sorted_ranges_iter(
-            (0, LayerSelection::fresh(original, None)),
+            (0, LayerSelection::fresh(original.into(), None)),
             std::iter::empty(),
             masks.last_history_action(),
         );
@@ -273,10 +274,7 @@ mod tests {
         let logic = logic
             .commit(&mut masks, IMG_ROI)
             .expect("moved commit survives");
-        assert_eq!(
-            layer_pixels(&masks),
-            Some(rect_ranges(15, 10, nz(5), nz(5)))
-        );
+        assert_eq!(layer_pixels(&masks), Some(Roi::new(15..20, 10..15).into()));
         assert_eq!(logic.frame.center, Point2::new(17.5, 12.5));
         assert_eq!(logic.frame.half, Vector2::new(2.5, 2.5));
     }
@@ -285,7 +283,7 @@ mod tests {
     fn commit_offscreen_doesnt_drop_empty_selection() {
         let (mut masks, original) = mask_with_rect(10, 10);
         let mut logic = ActiveSelectionLogic::fresh_from_sorted_ranges_iter(
-            (0, LayerSelection::fresh(original, None)),
+            (0, LayerSelection::fresh(original.into(), None)),
             std::iter::empty(),
             masks.last_history_action(),
         );
@@ -302,7 +300,7 @@ mod tests {
             total * Matrix3::new_translation(&delta),
         );
         let tip_before = masks.last_history_action();
-        assert!(logic.commit(&mut masks, img_roi()).is_some());
+        assert!(logic.commit(&mut masks, IMG_ROI).is_some());
         assert_eq!(layer_pixels(&masks), None);
         assert_ne!(masks.last_history_action(), tip_before);
     }
@@ -315,7 +313,7 @@ mod tests {
         // `tip` together with the rebase.
         let (mut masks, original) = mask_with_rect(0, 0);
         let mut logic = ActiveSelectionLogic::fresh_from_sorted_ranges_iter(
-            (0, LayerSelection::fresh(original, None)),
+            (0, LayerSelection::fresh(original.into(), None)),
             std::iter::empty(),
             masks.last_history_action(),
         );
@@ -330,17 +328,17 @@ mod tests {
             total * Matrix3::new_translation(&delta),
         );
         let mut logic = logic.commit(&mut masks, IMG_ROI).unwrap();
-        let added = rect_ranges(5, 3, nz(2), nz(1));
+        let added = Roi::new(5..7, 3..4);
         logic.merge_layers(
-            std::iter::once((0, added, None)),
+            std::iter::once((0, added.into(), None)),
             masks.last_history_action(),
         );
         // Rebase: the placed content plus the added cluster form the new
         // pristine original; `total` is back to identity, `tip` re-armed.
         let entry = &logic.layers[&0];
-        let placed = rect_ranges(5, 0, nz(5), nz(1));
+        let placed = Roi::new(5u16..10, 0..1);
         let union = SortedRanges::<u32>::try_from_span_iter(
-            placed.spans::<u32>().union(entry.committed.spans()),
+            placed.into_spans().union(entry.committed.spans()),
         )
         .unwrap();
         assert_eq!(entry.original(), &union);

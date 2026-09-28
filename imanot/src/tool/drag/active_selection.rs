@@ -160,11 +160,11 @@ mod tests {
 
     /// Layer with a 10x5 block at (10,10) plus a disjoint 10x5 outsider
     /// block at (40,30).
-    fn mask_with_outsiders() -> (MaskImage, SortedRanges<u32>, SortedRanges<u32>) {
-        let block = rect_ranges(10, 10, nz(10), nz(5));
-        let outsiders = rect_ranges(40, 30, nz(10), nz(5));
+    fn mask_with_outsiders() -> (MaskImage, Roi<u16>, Roi<u16>) {
+        let block = Roi::new(10u16..20, 10..15);
+        let outsiders = Roi::new(40u16..50, 30..35);
         let combined =
-            SortedRanges::try_from_span_iter(block.spans::<u32>().union(outsiders.spans()))
+            SortedRanges::try_from_span_iter(block.into_spans().union(outsiders.into_spans()))
                 .unwrap();
         (mask(combined), block, outsiders)
     }
@@ -176,7 +176,10 @@ mod tests {
         let (mut masks, block, outsiders) = mask_with_outsiders();
         let mut selection =
             ActiveSelection::from_logic(ActiveSelectionLogic::fresh_from_sorted_ranges_iter(
-                (0, LayerSelection::fresh(block, Some(outsiders))),
+                (
+                    0,
+                    LayerSelection::fresh(block.into(), Some(outsiders.into())),
+                ),
                 std::iter::empty(),
                 masks.last_history_action(),
             ));
@@ -199,9 +202,9 @@ mod tests {
         // survived the drop. (Span comparison: the mask keeps the coordinate
         // frame's bounds, not tight ones.)
         let expected = SortedRanges::<u32>::try_from_span_iter(
-            rect_ranges(15, 10, nz(10), nz(5))
-                .spans::<u32>()
-                .union(rect_ranges(40, 30, nz(10), nz(5)).spans()),
+            Roi::new(15u16..25, 10..15)
+                .into_spans()
+                .union(Roi::new(40u16..50, 30..35).into_spans()),
         )
         .unwrap();
         assert_eq!(

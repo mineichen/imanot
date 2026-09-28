@@ -2,25 +2,14 @@
 
 use std::num::NonZeroU32;
 
-use imask::{NonZeroRange, Roi, SortedRanges, Span, SpanBoundsBuilder, WithRoi};
+use imask::{ImageDimension, NonZeroRange, Roi, SortedRanges, Span, SpanBoundsBuilder, WithRoi};
 
 use crate::{History, MaskDefaultActions, MaskImage, PixelAreaStack};
-
-pub(crate) fn nz(n: u32) -> NonZeroU32 {
-    NonZeroU32::new(n).unwrap()
-}
 
 pub(crate) const IMG_ROI: Roi<u32> = Roi {
     x: NonZeroRange::<u32>::new_const(0..100),
     y: NonZeroRange::<u32>::new_const(0..100),
 };
-pub(crate) fn img_roi() -> Roi<u32> {
-    IMG_ROI
-}
-
-pub(crate) fn rect_ranges(x: u32, y: u32, w: NonZeroU32, h: NonZeroU32) -> SortedRanges<u32> {
-    SortedRanges::try_from_span_iter(Roi::new(x..x + w.get(), y..y + h.get()).into_spans()).unwrap()
-}
 
 /// `Vec` adapter: `Vec` is not `ImageDimension`, so tight bounds are tracked
 /// natively via `SpanBoundsBuilder` first.
@@ -49,8 +38,11 @@ pub(crate) fn outsider_block_ok(masks: &MaskImage) -> bool {
 }
 
 /// Fresh image holding a single layer with `ranges`.
-pub(crate) fn mask(ranges: SortedRanges<u32>) -> MaskImage {
+pub(crate) fn mask(
+    ranges: impl IntoIterator<Item = Span<u32>, IntoIter: ImageDimension>,
+) -> MaskImage {
     let mut masks = MaskImage::new([100, 100], PixelAreaStack::default(), History::default());
+    let ranges = SortedRanges::try_from_span_iter(ranges).expect("Valid ranges");
     masks.add(ranges);
     masks
 }
