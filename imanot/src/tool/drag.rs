@@ -496,7 +496,10 @@ mod tests {
     }
 
     fn mask_with_two_clusters() -> MaskImage {
-        mask(ranges_from_spans(vec![Span::new(0..2, 0u32), Span::new(5..7, 3u32)]).unwrap())
+        mask(ranges_from_spans(&[
+            Span::new(0..2, 0u32),
+            Span::new(5..7, 3u32),
+        ]))
     }
 
     fn click(tool: &mut DragTool, masks: &mut MaskImage, x: f32, y: f32, additive: bool) {
@@ -627,7 +630,7 @@ mod tests {
         click(&mut tool, &mut masks, 0.0, 0.0, false);
         click(&mut tool, &mut masks, 6.0, 3.0, true);
         // The selection content is exactly the union of the two clusters.
-        let union = ranges_from_spans(vec![Span::new(0..2, 0u32), Span::new(5..7, 3u32)]).unwrap();
+        let union = ranges_from_spans(&[Span::new(0..2, 0u32), Span::new(5..7, 3u32)]);
         let (frame, _) = tool.selection.as_ref().unwrap().snapshot_transform();
         let east = frame.point(Vector2::new(frame.half.x, 0.0));
         drag(
@@ -727,8 +730,8 @@ mod tests {
         let spans = (10..15)
             .map(|y| Span::new(10..20, y))
             .chain((30..35).map(|y| Span::new(40..50, y)))
-            .collect();
-        mask(ranges_from_spans(spans).unwrap())
+            .collect::<Vec<_>>();
+        mask(ranges_from_spans(&spans))
     }
 
     /// Click-selected 10x5 block on a layer that also holds a disjoint

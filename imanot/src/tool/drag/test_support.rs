@@ -1,7 +1,5 @@
 //! Shared fixtures for the drag module's unit tests.
 
-use std::num::NonZeroU32;
-
 use imask::{ImageDimension, NonZeroRange, Roi, SortedRanges, Span, SpanBoundsBuilder, WithRoi};
 
 use crate::{History, MaskDefaultActions, MaskImage, PixelAreaStack};
@@ -13,14 +11,15 @@ pub(crate) const IMG_ROI: Roi<u32> = Roi {
 
 /// `Vec` adapter: `Vec` is not `ImageDimension`, so tight bounds are tracked
 /// natively via `SpanBoundsBuilder` first.
-pub(crate) fn ranges_from_spans(spans: Vec<Span<u32>>) -> Option<SortedRanges<u32>> {
+pub(crate) fn ranges_from_spans(spans: &[Span<u32>]) -> SortedRanges<u32> {
     let tight = spans
         .iter()
         .copied()
         .collect::<SpanBoundsBuilder<u32>>()
         .build()
-        .ok()?;
-    SortedRanges::try_from_span_iter(WithRoi::new(spans.into_iter(), tight)).ok()
+        .expect("Ranges bounds should be valid");
+    SortedRanges::try_from_span_iter(WithRoi::new(spans.iter().copied(), tight))
+        .expect("Ranges should be valid")
 }
 
 pub(crate) fn layer_pixels(masks: &MaskImage) -> Option<SortedRanges<u32>> {
@@ -39,10 +38,10 @@ pub(crate) fn outsider_block_ok(masks: &MaskImage) -> bool {
 
 /// Fresh image holding a single layer with `ranges`.
 pub(crate) fn mask(
-    ranges: impl IntoIterator<Item = Span<u32>, IntoIter: ImageDimension>,
+    ranges_iter: impl IntoIterator<Item = Span<u32>, IntoIter: ImageDimension>,
 ) -> MaskImage {
     let mut masks = MaskImage::new([100, 100], PixelAreaStack::default(), History::default());
-    let ranges = SortedRanges::try_from_span_iter(ranges).expect("Valid ranges");
+    let ranges = SortedRanges::try_from_span_iter(ranges_iter).expect("Valid ranges");
     masks.add(ranges);
     masks
 }
