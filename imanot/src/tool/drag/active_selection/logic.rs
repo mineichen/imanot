@@ -271,7 +271,7 @@ mod tests {
             total * Matrix3::new_translation(&delta),
         );
         let logic = logic
-            .commit(&mut masks, img_roi())
+            .commit(&mut masks, IMG_ROI)
             .expect("moved commit survives");
         assert_eq!(
             layer_pixels(&masks),
@@ -329,7 +329,7 @@ mod tests {
             },
             total * Matrix3::new_translation(&delta),
         );
-        let mut logic = logic.commit(&mut masks, img_roi()).unwrap();
+        let mut logic = logic.commit(&mut masks, IMG_ROI).unwrap();
         let added = rect_ranges(5, 3, nz(2), nz(1));
         logic.merge_layers(
             std::iter::once((0, added, None)),

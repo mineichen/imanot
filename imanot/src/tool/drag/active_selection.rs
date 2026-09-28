@@ -185,7 +185,7 @@ mod tests {
             egui::Rect::from_min_max(egui::Pos2::new(0.0, 0.0), egui::Pos2::new(100.0, 100.0));
         let mut painter =
             ImagePainter::new(ctx.layer_painter(egui::LayerId::background()), screen, 1.0);
-        selection.render_transform(&ctx, &mut painter, img_roi(), false);
+        selection.render_transform(&ctx, &mut painter, IMG_ROI, false);
         assert!(selection.preview.is_visible());
         // Move by 5px, as a finished Move gesture would.
         let (frame, total) = selection.snapshot_transform();
@@ -193,7 +193,7 @@ mod tests {
         let gesture = TransformGesture::begin(HoverPart::Inside, press, (frame, total)).unwrap();
         selection.apply_gesture(&gesture, press + Vector2::new(5.0, 0.0), false);
         let selection = selection
-            .commit_transform(&mut masks, img_roi())
+            .commit_transform(&mut masks, IMG_ROI)
             .expect("moved commit survives");
         // Pixels landed (moved block + untouched outsiders), and the preview
         // survived the drop. (Span comparison: the mask keeps the coordinate

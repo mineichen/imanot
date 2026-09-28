@@ -2,7 +2,7 @@
 
 use std::num::NonZeroU32;
 
-use imask::{Roi, SortedRanges, Span, SpanBoundsBuilder, WithRoi};
+use imask::{NonZeroRange, Roi, SortedRanges, Span, SpanBoundsBuilder, WithRoi};
 
 use crate::{History, MaskDefaultActions, MaskImage, PixelAreaStack};
 
@@ -10,8 +10,12 @@ pub(crate) fn nz(n: u32) -> NonZeroU32 {
     NonZeroU32::new(n).unwrap()
 }
 
+pub(crate) const IMG_ROI: Roi<u32> = Roi {
+    x: NonZeroRange::<u32>::new_const(0..100),
+    y: NonZeroRange::<u32>::new_const(0..100),
+};
 pub(crate) fn img_roi() -> Roi<u32> {
-    Roi::from_dimensions(nz(100), nz(100))
+    IMG_ROI
 }
 
 pub(crate) fn rect_ranges(x: u32, y: u32, w: NonZeroU32, h: NonZeroU32) -> SortedRanges<u32> {
