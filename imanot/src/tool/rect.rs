@@ -3,6 +3,7 @@ use std::{
     sync::Arc,
 };
 
+use egui::Key::W;
 use futures::FutureExt;
 use imask::{Roi, SortedRanges, Span};
 
@@ -83,19 +84,17 @@ impl Tool for RectTool {
         {
             let (image_width, image_height) = ctx.image.image.adjust.dimensions();
 
-            let coords = u16::try_from(image_width.get() - 1).and_then(|width| {
-                let height = u16::try_from(image_height.get() - 1)?;
-                let x = u16::try_from(x)?;
-                let y = u16::try_from(y)?;
+            let Ok((x, y)) = u16::try_from(image_width.get() - 1)
+                .and_then(|width| {
+                    let height = u16::try_from(image_height.get() - 1)?;
+                    let x = u16::try_from(x)?;
+                    let y = u16::try_from(y)?;
 
-                Ok((x.min(width), y.min(height)))
-            });
-            let (x, y) = match coords {
-                Ok(x) => x,
-                Err(e) => {
-                    log::warn!("Cannot to u16: {e:?}");
-                    return;
-                }
+                    Ok((x.min(width), y.min(height)))
+                })
+                .inspect_err(|e| log::warn!("Cannot to u16: {e:?}"))
+            else {
+                return;
             };
             let span = Span::new(x..x + 1, y);
             match self.mode {
