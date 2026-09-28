@@ -99,26 +99,24 @@ impl DragToolSettings {
             };
         }
 
-        // A stale selection (history changed underneath: undo, redo or
-        // another tool's commit) no longer matches the mask, so it is dropped
-        // together with its gesture — before Delete could clear pixels from
-        // the outdated snapshot. Delete removes a live selection.
-        const DELETE_KEYS: [egui::Key; 2] = [egui::Key::Delete, egui::Key::Backspace];
-        let delete = ctx
-            .egui
-            .input(|i| DELETE_KEYS.iter().any(|k| i.key_pressed(*k)));
-
-        (selection, gesture) = match selection {
-            Some(sel) if sel.is_stale(ctx.image.masks.last_history_action()) => (None, None),
-            Some(sel) if delete => {
+        if let Some(sel) = selection.take() {
+            *ctx.postpone_new_images = true;
+            const DELETE_KEYS: [egui::Key; 2] = [egui::Key::Delete, egui::Key::Backspace];
+            let delete = ctx
+                .egui
+                .input(|i| DELETE_KEYS.iter().any(|k| i.key_pressed(*k)));
+            // A stale selection (history changed underneath: undo, redo or
+            // another tool's commit) no longer matches the mask, so it is dropped
+            // together with its gesture — before Delete could clear pixels from
+            // the outdated snapshot. Delete removes a live selection.
+            selection = if sel.is_stale(ctx.image.masks.last_history_action()) {
+                None
+            } else if delete {
                 sel.delete_all(&mut ctx.image.masks);
-                (None, None)
+                None
+            } else {
+                Some(sel)
             }
-            Some(sel) => {
-                *ctx.postpone_new_images = true;
-                (Some(sel), gesture)
-            }
-            None => (None, gesture),
         };
 
         let img_roi = {
@@ -132,7 +130,7 @@ impl DragToolSettings {
         let pointer = pointer_screen.map(|p| ctx.painter.screen_to_image(p));
 
         (selection, gesture) = match gesture {
-            Some(Gesture::Rect(rect)) => self.step_rect(rect, selection, &mut ctx, img_roi),
+            Some(Gesture::Rect(rect)) => self.step_rect(rect, selection, &mut ctx),
             Some(Gesture::Transform(transform)) => {
                 let pointer = pointer.map(|p| Point2::new(p.x as f64, p.y as f64));
                 step_transform(transform, selection, &mut ctx, pointer, img_roi)
@@ -140,11 +138,12 @@ impl DragToolSettings {
             None => self.step_idle(selection, &mut ctx, pointer, pointer_screen, img_roi),
         };
 
-        if gesture.is_none()
-            && let Some(s) = selection.as_mut()
+        if let Some(s) = selection.as_mut()
+            && let Some(Gesture::Rect(_)) | None = &gesture
         {
-            s.render_selection(ctx.egui, &mut *ctx.painter, img_roi);
+            s.render_selection(ctx.egui, &mut *ctx.painter, img_roi)
         }
+
         if self.pan_on_drag && gesture.is_none() && ctx.response.dragged() {
             PanTool::default().handle_interaction(ctx);
         }
@@ -158,7 +157,6 @@ impl DragToolSettings {
         mut rect: RectSelection,
         mut selection: Option<ActiveSelection>,
         ctx: &mut ToolContext,
-        img_roi: Roi<u32>,
     ) -> (Option<ActiveSelection>, Option<Gesture>) {
         if let Some(result) = rect.drag_finished(ctx) {
             let additive = ctx.egui.input(|i| i.modifiers.shift);
@@ -169,12 +167,7 @@ impl DragToolSettings {
         if !ctx.response.dragged() {
             return (selection, None);
         }
-        // A shift-held rubber band keeps the existing selection: keep
-        // showing its highlight underneath (cheap repaint of the live
-        // texture; nothing to show after a replacing drag dropped it).
-        if let Some(s) = selection.as_mut() {
-            s.render_selection(ctx.egui, ctx.painter, img_roi);
-        }
+
         (selection, Some(Gesture::Rect(rect)))
     }
 
