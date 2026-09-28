@@ -85,7 +85,7 @@ mod tests {
         let clipped = transform_layer(
             &rect_ranges(95, 95, nz(4), nz(4)),
             &Matrix3::new_translation(&Vector2::new(3.0, 3.0)),
-            img_roi(),
+            IMG_ROI,
         )
         .unwrap();
         let bounds = clipped.roi();
@@ -100,13 +100,13 @@ mod tests {
         // equal a single composed transform of the original.
         let original = rect_ranges(40, 40, nz(10), nz(10));
         let shift = Matrix3::new_translation(&Vector2::new(5.0, 0.0));
-        let after_move = transform_layer(&original, &shift, img_roi()).unwrap();
+        let after_move = transform_layer(&original, &shift, IMG_ROI).unwrap();
         let total = rotate_about(Point2::new(50.0, 45.0), std::f64::consts::FRAC_PI_2) * shift;
-        let from_original = transform_layer(&original, &total, img_roi()).unwrap();
+        let from_original = transform_layer(&original, &total, IMG_ROI).unwrap();
         // Chaining (rotate the already-rasterized move result) must not be
         // what the tool commits; it must equal the direct transform.
         let delta = rotate_about(Point2::new(50.0, 45.0), std::f64::consts::FRAC_PI_2);
-        let chained = transform_layer(&after_move, &delta, img_roi()).unwrap();
+        let chained = transform_layer(&after_move, &delta, IMG_ROI).unwrap();
         assert_eq!(from_original, chained);
     }
 
@@ -116,7 +116,7 @@ mod tests {
         // Uses the production `rotate_about` helper, not a test-only matrix.
         let original = rect_ranges(40, 40, nz(10), nz(20));
         let m = rotate_about(Point2::new(45.0, 50.0), std::f64::consts::FRAC_PI_2);
-        let out = transform_layer(&original, &m, img_roi()).unwrap();
+        let out = transform_layer(&original, &m, IMG_ROI).unwrap();
         let bounds = out.roi();
         assert_eq!(bounds.width().get(), 20);
         assert_eq!(bounds.height().get(), 10);
@@ -127,7 +127,7 @@ mod tests {
         // Horizontal mirror about the west edge (x=10) of a 5px rect.
         let original = rect_ranges(10, 10, nz(5), nz(5));
         let m = scale_about_frame(Point2::new(10.0, 12.5), 0.0, Vector2::new(-1.0, 1.0));
-        let out = transform_layer(&original, &m, img_roi()).unwrap();
+        let out = transform_layer(&original, &m, IMG_ROI).unwrap();
         let bounds = out.roi();
         assert_eq!(bounds.width().get(), 5);
         assert_eq!(bounds.height().get(), 5);
