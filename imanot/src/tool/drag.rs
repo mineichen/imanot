@@ -372,7 +372,7 @@ mod tests {
         // sharing the rows.
         let mut masks = mask_blocks();
         let mut tool = DragTool::default();
-        click(&mut tool, &mut masks, 12.0, 12.0, false);
+        tool.select_pos(&mut masks, Pos2::new(12.0, 12.0), IMG_ROI, false);
         drag_move(&mut tool, Point2::new(15.0, 12.5), Point2::new(44.5, 32.5));
         let sel = tool.selection.as_ref().unwrap();
         assert_eq!(
@@ -420,7 +420,7 @@ mod tests {
             .filter(|s| (30..35).contains(&s.y))
             .collect();
         let mut tool = DragTool::default();
-        click(&mut tool, &mut masks, 12.0, 12.0, false);
+        tool.select_pos(&mut masks, Pos2::new(12.0, 12.0), IMG_ROI, false);
         drag_move(&mut tool, Point2::new(15.0, 12.5), Point2::new(45.0, 32.5));
         tool.commit(&mut masks, IMG_ROI);
         tool.delete_selection(&mut masks);
@@ -502,18 +502,14 @@ mod tests {
         ]))
     }
 
-    fn click(tool: &mut DragTool, masks: &mut MaskImage, x: f32, y: f32, additive: bool) {
-        tool.select_pos(masks, Pos2::new(x, y), IMG_ROI, additive);
-    }
-
     #[test]
     fn shift_click_accumulates_clusters_same_layer() {
         let mut masks = mask_with_two_clusters();
         let mut tool = DragTool::default();
-        click(&mut tool, &mut masks, 0.0, 0.0, false);
+        tool.select_pos(&mut masks, Pos2::new(0.0, 0.0), IMG_ROI, false);
         let sel = tool.selection.as_ref().unwrap();
         assert!(sel.covers_on_layer(0, 0, 0));
-        click(&mut tool, &mut masks, 6.0, 3.0, true);
+        tool.select_pos(&mut masks, Pos2::new(6.0, 3.0), IMG_ROI, true);
         let sel = tool.selection.as_ref().unwrap();
         // Same layer unions into a single entry (like rect-select): both
         // clusters are covered by the one selection.
@@ -527,13 +523,13 @@ mod tests {
     fn shift_click_covered_or_empty_is_noop() {
         let mut masks = mask_with_two_clusters();
         let mut tool = DragTool::default();
-        click(&mut tool, &mut masks, 0.0, 0.0, false);
-        click(&mut tool, &mut masks, 6.0, 3.0, true);
+        tool.select_pos(&mut masks, Pos2::new(0.0, 0.0), IMG_ROI, false);
+        tool.select_pos(&mut masks, Pos2::new(6.0, 3.0), IMG_ROI, true);
         let tip_before = masks.last_history_action();
         // Re-clicking covered pixels is a no-op: no duplicate entry, no
         // history write, no rebase. Clicking empty space keeps the selection.
-        click(&mut tool, &mut masks, 1.0, 0.0, true);
-        click(&mut tool, &mut masks, 50.0, 50.0, true);
+        tool.select_pos(&mut masks, Pos2::new(1.0, 0.0), IMG_ROI, true);
+        tool.select_pos(&mut masks, Pos2::new(50.0, 50.0), IMG_ROI, true);
         let sel = tool.selection.as_ref().unwrap();
         assert!(sel.covers_on_layer(0, 0, 0));
         assert_eq!(masks.last_history_action(), tip_before);
@@ -544,8 +540,8 @@ mod tests {
         let mut masks = mask(Roi::new(0..2, 0..2).into_spans());
         masks.add(Roi::new(50u16..52, 50..52).into());
         let mut tool = DragTool::default();
-        click(&mut tool, &mut masks, 0.0, 0.0, false);
-        click(&mut tool, &mut masks, 51.0, 50.0, true);
+        tool.select_pos(&mut masks, Pos2::new(0.0, 0.0), IMG_ROI, false);
+        tool.select_pos(&mut masks, Pos2::new(51.0, 50.0), IMG_ROI, true);
         let sel = tool.selection.as_ref().unwrap();
         assert!(sel.covers_on_layer(0, 0, 0));
         assert!(sel.covers_on_layer(1, 51, 50));
@@ -561,12 +557,12 @@ mod tests {
         let mut masks = mask_with_three_layers();
         let mut tool = DragTool::default();
         tool.set_layer(0);
-        click(&mut tool, &mut masks, 0.0, 0.0, false);
+        tool.select_pos(&mut masks, Pos2::new(0.0, 0.0), IMG_ROI, false);
         assert!(tool.selection.is_some());
-        click(&mut tool, &mut masks, 51.0, 0.0, false);
+        tool.select_pos(&mut masks, Pos2::new(51.0, 0.0), IMG_ROI, false);
         assert!(tool.selection.is_none());
-        click(&mut tool, &mut masks, 0.0, 0.0, false);
-        click(&mut tool, &mut masks, 51.0, 0.0, true);
+        tool.select_pos(&mut masks, Pos2::new(0.0, 0.0), IMG_ROI, false);
+        tool.select_pos(&mut masks, Pos2::new(51.0, 0.0), IMG_ROI, true);
         assert!(tool.selection.unwrap().covers_on_layer(0, 0, 0));
     }
 
@@ -574,7 +570,7 @@ mod tests {
     fn shift_add_rebases_transform_without_history_write() {
         let mut masks = mask_with_two_clusters();
         let mut tool = DragTool::default();
-        click(&mut tool, &mut masks, 0.0, 0.0, false);
+        tool.select_pos(&mut masks, Pos2::new(0.0, 0.0), IMG_ROI, false);
         // Transform + commit.
         drag_move(&mut tool, Point2::new(1.0, 0.0), Point2::new(6.0, 0.0));
         tool.commit(&mut masks, IMG_ROI);
@@ -582,7 +578,7 @@ mod tests {
         // without touching history. (Snapshot semantics asserted directly in
         // the `logic` unit tests.)
         let tip_before = masks.last_history_action();
-        click(&mut tool, &mut masks, 6.0, 3.0, true);
+        tool.select_pos(&mut masks, Pos2::new(6.0, 3.0), IMG_ROI, true);
         let sel = tool.selection.as_ref().unwrap();
         assert_eq!(masks.last_history_action(), tip_before);
         assert_eq!(sel.snapshot_transform().1, Matrix3::identity());
@@ -627,8 +623,8 @@ mod tests {
         // content.
         let mut masks = mask_with_two_clusters();
         let mut tool = DragTool::default();
-        click(&mut tool, &mut masks, 0.0, 0.0, false);
-        click(&mut tool, &mut masks, 6.0, 3.0, true);
+        tool.select_pos(&mut masks, Pos2::new(0.0, 0.0), IMG_ROI, false);
+        tool.select_pos(&mut masks, Pos2::new(6.0, 3.0), IMG_ROI, true);
         // The selection content is exactly the union of the two clusters.
         let union = ranges_from_spans(&[Span::new(0..2, 0u32), Span::new(5..7, 3u32)]);
         let (frame, _) = tool.selection.as_ref().unwrap().snapshot_transform();
@@ -739,7 +735,7 @@ mod tests {
     fn fresh_block_selection() -> (MaskImage, DragTool) {
         let mut masks = mask_blocks();
         let mut tool = DragTool::default();
-        click(&mut tool, &mut masks, 12.0, 12.0, false);
+        tool.select_pos(&mut masks, Pos2::new(12.0, 12.0), IMG_ROI, false);
         (masks, tool)
     }
 
@@ -771,11 +767,11 @@ mod tests {
         // union may change.
         let mut masks = mask_with_two_clusters();
         let mut tool = DragTool::default();
-        click(&mut tool, &mut masks, 0.0, 0.0, false);
+        tool.select_pos(&mut masks, Pos2::new(0.0, 0.0), IMG_ROI, false);
         drag_move(&mut tool, Point2::new(1.0, 0.0), Point2::new(6.0, 0.0));
         tool.commit(&mut masks, IMG_ROI);
         let before = layer_pixels(&masks).unwrap();
-        click(&mut tool, &mut masks, 6.0, 3.0, true);
+        tool.select_pos(&mut masks, Pos2::new(6.0, 3.0), IMG_ROI, true);
         drag_move(&mut tool, Point2::new(6.0, 3.0), Point2::new(16.0, 13.0));
         tool.commit(&mut masks, IMG_ROI);
         let after = layer_pixels(&masks).unwrap();
