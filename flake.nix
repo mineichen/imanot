@@ -106,6 +106,7 @@
               pkgs.ripgrep
               pkgs.slirp4netns
               pkgs.git
+              pkgs.claude-code
               pkgs.opencode
               pkgs.busybox
 
