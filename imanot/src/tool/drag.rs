@@ -139,7 +139,7 @@ impl DragToolSettings {
         };
 
         if let Some(s) = selection.as_mut()
-            && let Some(Gesture::Rect(_)) | None = &gesture
+            && matches!(&gesture, Some(Gesture::Rect(_)) | None)
         {
             s.render_selection(ctx.egui, &mut *ctx.painter, img_roi)
         }
@@ -155,13 +155,13 @@ impl DragToolSettings {
     fn step_rect(
         &self,
         mut rect: RectSelection,
-        mut selection: Option<ActiveSelection>,
+        selection: Option<ActiveSelection>,
         ctx: &mut ToolContext,
     ) -> (Option<ActiveSelection>, Option<Gesture>) {
         if let Some(result) = rect.drag_finished(ctx) {
             let additive = ctx.egui.input(|i| i.modifiers.shift);
-            let update =
-                self.calc_select_rect(&ctx.image.masks, Roi::from(result.rect()), additive);
+            let roi = Roi::from(result.rect());
+            let update = self.calc_select_rect(&ctx.image.masks, roi, additive);
             return (update.apply(selection), None);
         }
         if !ctx.response.dragged() {
