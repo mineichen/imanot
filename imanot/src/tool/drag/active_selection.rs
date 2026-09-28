@@ -133,7 +133,7 @@ impl ActiveSelection {
     /// Pure moves (`allow_reposition`) only shift the already-uploaded pixels
     /// to the new bounds origin — no rasterization, no upload. Anything else
     /// re-rasterizes the transformed snapshot into the small texture.
-    pub(crate) fn render_transform(
+    pub(super) fn render_transform(
         &mut self,
         egui_ctx: &egui::Context,
         painter: &mut ImagePainter,
