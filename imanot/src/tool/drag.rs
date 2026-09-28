@@ -435,13 +435,6 @@ mod tests {
         mask(rect_ranges(x, y, nz(5), nz(5)))
     }
 
-    /// Rect-select the 5x5 block placed by [`mask_with_rect`]: the whole
-    /// layer, so the background is empty — same shape the `select_layer`
-    /// helper used to build by hand.
-    fn select_rect_block(tool: &mut DragTool, masks: &MaskImage, x: u32, y: u32) {
-        tool.select_rect(masks, Roi::new(x..x + 5, y..y + 5), false);
-    }
-
     /// Simulate a Move gesture from `from` to `to` through the real update
     /// path (frame and matrix stay in sync by construction).
     fn drag_move(tool: &mut DragTool, from: Point2<f64>, to: Point2<f64>) {
@@ -463,7 +456,7 @@ mod tests {
         // step returns `None` on mouseup.)
         let mut masks = mask_with_rect(10, 10);
         let mut tool = DragTool::default();
-        select_rect_block(&mut tool, &masks, 10, 10);
+        tool.select_rect(&masks, Roi::new(10..10 + 5, 10..10 + 5), false);
         drag_move(&mut tool, Point2::new(12.5, 12.5), Point2::new(17.5, 12.5));
         tool.commit(&mut masks, img_roi());
         assert!(
@@ -478,7 +471,7 @@ mod tests {
         // history.
         let mut masks = mask_with_rect(10, 10);
         let mut tool = DragTool::default();
-        select_rect_block(&mut tool, &masks, 10, 10);
+        tool.select_rect(&masks, Roi::new(10..10 + 5, 10..10 + 5), false);
         let tip_before = masks.last_history_action();
         tool.commit(&mut masks, img_roi());
         assert_eq!(masks.last_history_action(), tip_before);
@@ -491,7 +484,7 @@ mod tests {
     fn delete_selection_clears_ranges_and_drops_selection() {
         let mut masks = mask_with_rect(10, 10);
         let mut tool = DragTool::default();
-        select_rect_block(&mut tool, &masks, 10, 10);
+        tool.select_rect(&masks, Roi::new(10..10 + 5, 10..10 + 5), false);
         let tip_before = masks.last_history_action();
         tool.delete_selection(&mut masks);
         assert_eq!(layer_pixels(&masks), None);
