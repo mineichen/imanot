@@ -49,7 +49,7 @@ mod tests {
     use nalgebra::{Point2, Vector2};
 
     fn disjoint_rects() -> SortedRanges<u32> {
-        ranges_from_spans(vec![Span::new(0..2, 0u32), Span::new(5..7, 3u32)]).unwrap()
+        ranges_from_spans(&[Span::new(0..2, 0u32), Span::new(5..7, 3u32)])
     }
 
     #[test]
@@ -155,7 +155,7 @@ mod tests {
     #[test]
     fn cluster_connects_diagonally() {
         // 8-connectivity: diagonally touching pixels form one cluster.
-        let ranges = ranges_from_spans(vec![Span::new(0..1, 0u32), Span::new(1..2, 1u32)]).unwrap();
+        let ranges = ranges_from_spans(&[Span::new(0..1, 0u32), Span::new(1..2, 1u32)]);
         let cluster = cluster_at(&ranges, 0, 0).unwrap();
         assert_eq!(cluster.count(), 2);
     }
