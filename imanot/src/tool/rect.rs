@@ -61,7 +61,6 @@ impl Tool for RectTool {
         if let Some(rect_result) = selection {
             match self.mode {
                 Mode::Insert => {
-                    // let color = self.color(&ctx);
                     if let Ok(pixel_area) =
                         SortedRanges::try_from_span_iter(rect_result.rect().into_spans())
                     {
