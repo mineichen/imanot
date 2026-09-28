@@ -386,7 +386,7 @@ mod tests {
         // mask keeps the coordinate frame's bounds, not tight ones.)
         assert_eq!(
             layer_pixels(&masks).map(|p| p.spans::<u32>().collect::<Vec<_>>()),
-            Some(rect_ranges(40, 30, nz(10), nz(5)).spans::<u32>().collect())
+            Some(Roi::new(40..50, 30..35).into_spans().collect())
         );
         // Second fractional move: still exact, only it and the outsiders
         // remain.
@@ -398,9 +398,9 @@ mod tests {
                 * Matrix3::new_translation(&Vector2::new(30.0, 20.0))
         );
         let expected = SortedRanges::<u32>::try_from_span_iter(
-            rect_ranges(16, 20, nz(10), nz(5))
-                .spans::<u32>()
-                .union(rect_ranges(40, 30, nz(10), nz(5)).spans()),
+            Roi::new(16u16..26, 20..25)
+                .into_spans()
+                .union(Roi::new(40..50, 30..35).into_spans()),
         )
         .unwrap();
         assert_eq!(
@@ -432,7 +432,10 @@ mod tests {
     }
 
     fn mask_with_rect(x: u32, y: u32) -> MaskImage {
-        mask(rect_ranges(x, y, nz(5), nz(5)))
+        mask(
+            SortedRanges::try_from_span_iter(Roi::new(x..x + 5, y..y + 5).into_spans())
+                .expect("NonZeroSize"),
+        )
     }
 
     /// Simulate a Move gesture from `from` to `to` through the real update
@@ -535,8 +538,8 @@ mod tests {
 
     #[test]
     fn shift_click_adds_other_layer() {
-        let mut masks = mask(rect_ranges(0, 0, nz(2), nz(2)));
-        masks.add(rect_ranges(50, 50, nz(2), nz(2)));
+        let mut masks = mask(Roi::new(0..2, 0..2).into_spans());
+        masks.add(Roi::new(50u16..52, 50..52).into());
         let mut tool = DragTool::default();
         click(&mut tool, &mut masks, 0.0, 0.0, false);
         click(&mut tool, &mut masks, 51.0, 50.0, true);
@@ -585,9 +588,9 @@ mod tests {
         drag_move(&mut tool, Point2::new(6.0, 3.0), Point2::new(16.0, 13.0));
         tool.commit(&mut masks, IMG_ROI);
         let expected = SortedRanges::<u32>::try_from_span_iter(
-            rect_ranges(15, 10, nz(2), nz(1))
-                .spans::<u32>()
-                .union(rect_ranges(15, 13, nz(2), nz(1)).spans()),
+            Roi::new(15u16..17, 10..11)
+                .into_spans()
+                .union(Roi::new(15..17, 13..14).into_spans()),
         )
         .unwrap();
         assert_eq!(layer_pixels(&masks), Some(expected));
@@ -635,7 +638,7 @@ mod tests {
             false,
         );
         let total = tool.selection.as_ref().unwrap().snapshot_transform().1;
-        let expected = transform_layer(&union, &total, IMG_ROI).unwrap();
+        let expected = transform_layer(union.spans(), &total, IMG_ROI).unwrap();
         tool.commit(&mut masks, IMG_ROI);
         assert_eq!(layer_pixels(&masks), Some(expected));
         // Both areas survived the resize (no subtraction of the old area),
@@ -646,9 +649,9 @@ mod tests {
     }
 
     fn mask_with_three_layers() -> MaskImage {
-        let mut masks = mask(rect_ranges(0, 0, nz(2), nz(2)));
-        masks.add(rect_ranges(50, 0, nz(2), nz(2)));
-        masks.add(rect_ranges(0, 50, nz(2), nz(2)));
+        let mut masks = mask(Roi::new(0..2, 0..2).into_spans());
+        masks.add(Roi::new(50u16..52, 0..2).into());
+        masks.add(Roi::new(0u16..2, 50..52).into());
         masks
     }
 
@@ -714,9 +717,9 @@ mod tests {
         tool.select_layers(&masks, 0..3);
         drag_move(&mut tool, Point2::new(1.0, 1.0), Point2::new(4.0, 5.0));
         tool.commit(&mut masks, IMG_ROI);
-        assert_eq!(layer_pixels(&masks), Some(rect_ranges(3, 4, nz(2), nz(2))));
+        assert_eq!(layer_pixels(&masks), Some(Roi::new(3u16..5, 4..6).into()));
         let second = masks.subgroups_stack().get(1).map(|a| a.pixels.clone());
-        assert_eq!(second, Some(rect_ranges(53, 4, nz(2), nz(2))));
+        assert_eq!(second, Some(Roi::new(53..55, 4..6).into()));
     }
 
     fn mask_blocks() -> MaskImage {
