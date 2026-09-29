@@ -193,7 +193,7 @@ mod tests {
         // Move by 5px, as a finished Move gesture would.
         let (frame, total) = selection.snapshot_transform();
         let press = frame.center;
-        let gesture = TransformGesture::begin(HoverPart::Inside, press, (frame, total)).unwrap();
+        let gesture = TransformGesture::begin(HoverGesture::Move, press, (frame, total)).unwrap();
         selection.apply_gesture(&gesture, press + Vector2::new(5.0, 0.0), false);
         let selection = selection
             .commit_transform(&mut masks, IMG_ROI)

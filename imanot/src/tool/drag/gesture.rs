@@ -3,7 +3,7 @@ use nalgebra::{Matrix3, Point2, Vector2};
 
 use crate::RectSelection;
 
-use super::active_selection::{HoverPart, resize_cursor};
+use super::active_selection::{HoverGesture, resize_cursor};
 use super::frame::{Anchor, Frame, clamp_half, rotate_about, scale_about_frame, snap_angle};
 
 /// In-progress pointer gesture. Pointer positions are image coordinates.
@@ -38,21 +38,18 @@ enum TransformKind {
 
 impl TransformGesture {
     /// Start the gesture matching the hovered frame part at the press
-    /// position; `None` when the press is outside the frame.
+    /// position; `None` when the press affords no gesture.
     pub(super) fn begin(
-        part: HoverPart,
-        press: Point2<f64>,
+        part: HoverGesture,
+        start: Point2<f64>,
         (base, base_total): (Frame, Matrix3<f64>),
     ) -> Option<Self> {
         let kind = match part {
-            HoverPart::Outside => return None,
-            HoverPart::Inside => TransformKind::Move { start: press },
-            HoverPart::Anchor(anchor) => TransformKind::Resize {
-                anchor,
-                start: press,
-            },
-            HoverPart::Rotate => TransformKind::Rotate {
-                start_angle: (press.y - base.center.y).atan2(press.x - base.center.x),
+            HoverGesture::None => return None,
+            HoverGesture::Move => TransformKind::Move { start },
+            HoverGesture::Resize(anchor) => TransformKind::Resize { anchor, start },
+            HoverGesture::Rotate => TransformKind::Rotate {
+                start_angle: (start.y - base.center.y).atan2(start.x - base.center.x),
             },
         };
         Some(Self {
@@ -230,7 +227,7 @@ mod tests {
     }
 
     fn resize(anchor: Anchor, start: Point2<f64>, base: Frame) -> TransformGesture {
-        let part = HoverPart::Anchor(anchor);
+        let part = HoverGesture::Resize(anchor);
         TransformGesture::begin(part, start, (base, Matrix3::identity())).unwrap()
     }
 
@@ -238,7 +235,7 @@ mod tests {
     fn move_snaps_to_whole_pixels() {
         // App drag deltas are fractional, but masks live on whole pixels.
         let base = (square(), Matrix3::identity());
-        let gesture = TransformGesture::begin(HoverPart::Inside, pt(15.0, 12.5), base).unwrap();
+        let gesture = TransformGesture::begin(HoverGesture::Move, pt(15.0, 12.5), base).unwrap();
         let (frame, total) = gesture.apply(pt(44.5, 32.5), false);
         assert_eq!(total, Matrix3::new_translation(&Vector2::new(30.0, 20.0)));
         assert_eq!(frame.center, pt(42.5, 32.5));
