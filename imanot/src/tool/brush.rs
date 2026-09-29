@@ -181,11 +181,28 @@ fn draw_brush_outline(
     painter.draw_dotted_rect(top_left, bottom_right);
 }
 
+/// Default brush size as percent of the viewport's smaller side.
 const DEFAULT_BRUSH_SIZE: NonZeroU16 = NonZeroU16::new(10).expect("10 is not zero");
+
+/// Converts a brush size, given as percent of the viewport's smaller side,
+/// into a half extent in image pixels for the given `render_scale`
+/// (screen pixels per image pixel). The result is rounded to whole pixels.
+///
+/// Because the size is defined in screen space, the brush covers the same
+/// on-screen area at any zoom level, while the number of affected image
+/// pixels shrinks as you zoom in.
+fn brush_half_size_image_px(viewport_min_side: f32, size_percent: u16, render_scale: f32) -> usize {
+    let screen_size = viewport_min_side * (size_percent as f32 / 100.0);
+    let image_size = screen_size / render_scale;
+    (image_size / 2.0).round() as usize
+}
 
 #[non_exhaustive]
 pub struct BrushTool {
     draw_tool: DrawTool,
+    /// Brush size as percent of the viewport's smaller side.
+    /// The on-screen size stays constant when zooming; the covered
+    /// image-pixel area is derived from the current zoom level.
     pub brush_size: NonZeroU16,
     stroke: Option<StrokeState>,
 }
@@ -215,6 +232,7 @@ impl Default for BrushTool {
 }
 
 impl BrushTool {
+    /// Set the brush size as percent of the viewport's smaller side.
     pub fn set_brush_size(&mut self, size: NonZeroU16) -> &mut Self {
         self.brush_size = size;
         self
@@ -239,7 +257,11 @@ impl Tool for BrushTool {
         let image_height = ctx.image.image.original.height();
         let width = image_width.get() as usize;
         let height = image_height.get() as usize;
-        let half_size = self.brush_size.get() as usize;
+        let half_size = brush_half_size_image_px(
+            ctx.response.rect.size().min_elem(),
+            self.brush_size.get(),
+            ctx.painter.render_scale(),
+        );
 
         let cursor_pos = ctx
             .response
@@ -247,8 +269,11 @@ impl Tool for BrushTool {
             .or_else(|| ctx.response.hover_pos())
             .map(|screen_pos| {
                 let image_pos = ctx.painter.screen_to_image(screen_pos);
-                let x = image_pos.x.round().clamp(0.0, (width - 1) as f32) as usize;
-                let y = image_pos.y.round().clamp(0.0, (height - 1) as f32) as usize;
+                // A pixel spans [x, x+1) in image space, so the pixel under
+                // the cursor starts at its floor, not its nearest neighbor.
+                // Rounding would snap to the next pixel at the pixel center.
+                let x = image_pos.x.floor().clamp(0.0, (width - 1) as f32) as usize;
+                let y = image_pos.y.floor().clamp(0.0, (height - 1) as f32) as usize;
                 (x, y)
             });
 
@@ -459,5 +484,42 @@ mod tests {
         s.stamp_square(10, 10, 3);
         let count2 = count_mask_true(&s.mask);
         assert_eq!(count1, count2);
+    }
+
+    #[test]
+    fn brush_half_size_screen_equals_image_at_scale_one() {
+        // 10% of a 1000px viewport = 100 screen px -> 50 half extent
+        assert_eq!(brush_half_size_image_px(1000.0, 10, 1.0), 50);
+    }
+
+    #[test]
+    fn brush_half_size_shrinks_in_image_pixels_when_zooming_in() {
+        let fit = brush_half_size_image_px(1000.0, 10, 1.0);
+        let zoomed_in = brush_half_size_image_px(1000.0, 10, 4.0);
+        assert_eq!(zoomed_in, 13);
+        assert!(zoomed_in < fit);
+    }
+
+    #[test]
+    fn brush_half_size_constant_on_screen_across_zoom() {
+        // On-screen half extent stays viewport-relative regardless of zoom
+        for scale in [0.5, 1.0, 4.0, 50.0] {
+            let half = brush_half_size_image_px(1000.0, 10, scale) as f32;
+            assert!((half * scale - 50.0).abs() <= 0.5 * scale);
+        }
+    }
+
+    #[test]
+    fn brush_half_size_at_max_zoom() {
+        // Max zoom: a single image pixel covers 1/20 of the viewport's
+        // smaller side, i.e. scale = 20 for a 1000px viewport.
+        // 10% brush => 100 screen px => 5 image px => half 2.5 -> rounds to 3
+        assert_eq!(brush_half_size_image_px(1000.0, 10, 20.0), 3);
+    }
+
+    #[test]
+    fn brush_half_size_single_pixel_for_tiny_brush_at_max_zoom() {
+        // 1% brush => 10 screen px => 0.5 image px => half 0.25 -> 0 (1px brush)
+        assert_eq!(brush_half_size_image_px(1000.0, 1, 20.0), 0);
     }
 }

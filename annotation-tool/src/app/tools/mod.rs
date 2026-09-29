@@ -99,7 +99,7 @@ pub(super) fn ui(
                 let any: &mut dyn Any = &mut **tool;
                 if let Some(brush) = any.downcast_mut::<BrushTool>() {
                     ui.horizontal(|ui| {
-                        ui.label("Brush Size:");
+                        ui.label("Brush Size (% of viewport):");
                         const NZ100: NonZeroU16 = NonZeroU16::new(100).unwrap();
                         ui.add(egui::Slider::new(&mut brush.brush_size, NonZeroU16::MIN..=NZ100).step_by(1.0));
                     });
