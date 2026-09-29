@@ -67,8 +67,8 @@ pub(crate) fn hit_test(
 ) -> HoverGesture {
     let frame = selection.frame();
     let painter = &*ctx.painter;
-    let img = painter.screen_to_image(screen);
-    let p = Point2::new(f64::from(img.x), f64::from(img.y));
+    let pointer = painter.screen_to_image(screen);
+    let p = Point2::new(f64::from(pointer.x), f64::from(pointer.y));
     let scale = f64::from(painter.render_scale());
     if (p - rotate_handle_image(painter, frame)).norm() <= f64::from(ANCHOR_SIZE_PX) / scale {
         return HoverGesture::Rotate;
@@ -86,7 +86,6 @@ pub(crate) fn hit_test(
     if lu.abs() > frame.half.x.abs() || lv.abs() > frame.half.y.abs() {
         return HoverGesture::None;
     }
-    let pointer = painter.screen_to_image(screen);
     let (w, h) = ctx.image.image.adjust.dimensions();
     let (wrange, hrange) = ((0.0)..w.get() as f32, (0.0)..h.get() as f32);
     if !wrange.contains(&pointer.x) || !hrange.contains(&pointer.y) {
