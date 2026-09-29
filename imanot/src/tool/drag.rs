@@ -7,7 +7,7 @@ use nalgebra::Point2;
 
 use crate::{
     AffectedLayer, PanTool, RectSelection, Tool, ToolContext, ToolFactory,
-    tool::drag::active_selection::{HoverPart, LayerSelection},
+    tool::drag::active_selection::{HoverGesture, LayerSelection},
 };
 
 mod active_selection;
@@ -216,13 +216,7 @@ impl DragToolSettings {
         let pointer = ctx.painter.screen_to_image(press_screen);
         let r = selection.and_then(|s| {
             let press = Point2::new(pointer.x as f64, pointer.y as f64);
-            let part = match active_selection::hit_test(&*ctx.painter, press_screen, s.frame()) {
-                // Inside the frame, only a selected pixel grabs the selection.
-                HoverPart::Inside if !hovers_selected(selection, ctx, pointer) => {
-                    HoverPart::Outside
-                }
-                part => part,
-            };
+            let part = active_selection::hit_test(ctx, press_screen, s);
             TransformGesture::begin(part, press, s.snapshot_transform())
         });
         match r {
@@ -259,21 +253,20 @@ impl DragToolSettings {
         gesture: Option<&Gesture>,
         pointer_screen: Option<Pos2>,
     ) {
+        let is_hovered_affected =
+            || (ctx.image.masks.hover_layer()).is_some_and(|l| self.layer.affects(l));
         let icon = match (gesture, selection, pointer_screen) {
             (Some(Gesture::Transform(t)), Some(sel), _) => t.cursor(sel.frame()),
             (Some(Gesture::Rect(_)), _, _) => CursorIcon::Crosshair,
             // Not on a drag start: `begin_gesture` already hit-tested.
             (None, sel, Some(p)) if !ctx.response.drag_started() => {
-                let frame = sel.map(ActiveSelection::frame);
-                match frame.map(|f| (f, active_selection::hit_test(&*ctx.painter, p, f))) {
-                    Some((f, HoverPart::Anchor(a))) => active_selection::resize_cursor(f, a),
-                    Some((_, HoverPart::Rotate)) => CursorIcon::Grab,
-                    _ if hovers_selected(selection, ctx, ctx.painter.screen_to_image(p)) => {
-                        CursorIcon::Move
+                match sel.map(|s| (s, active_selection::hit_test(ctx, p, s))) {
+                    Some((s, HoverGesture::Resize(a))) => {
+                        active_selection::resize_cursor(s.frame(), a)
                     }
-                    _ if (ctx.image.masks.hover_layer()).is_some_and(|l| self.layer.affects(l)) => {
-                        CursorIcon::PointingHand
-                    }
+                    Some((_, HoverGesture::Rotate)) => CursorIcon::Grab,
+                    Some((_, HoverGesture::Move)) => CursorIcon::Move,
+                    _ if is_hovered_affected() => CursorIcon::PointingHand,
                     _ => return,
                 }
             }
@@ -312,18 +305,6 @@ fn step_transform(
         ctx.egui.set_cursor_icon(transform.cursor(sel.frame()));
         (Some(sel), Some(Gesture::Transform(transform)))
     }
-}
-
-/// Whether the hovered layer's pixel at `pointer` is in `selection`; the
-/// pixel is only looked up when a layer is hovered.
-fn hovers_selected(selection: Option<&ActiveSelection>, ctx: &ToolContext, pointer: Pos2) -> bool {
-    ctx.image
-        .masks
-        .hover_layer()
-        .and_then(|layer| selection.map(|s| (s, layer)))
-        .map_or(false, |(sel, layer)| {
-            sel.covers_on_layer(layer, pointer.x as u32, pointer.y as u32)
-        })
 }
 
 #[cfg(test)]
@@ -427,14 +408,14 @@ mod tests {
     }
 
     fn drag_move(tool: &mut DragTool, from: Point2<f64>, to: Point2<f64>) {
-        drag(tool, HoverPart::Inside, from, to, false);
+        drag(tool, HoverGesture::Move, from, to, false);
     }
 
     /// Run a transform gesture on `part` from `from` to `to` through the
     /// real update path (frame and matrix stay in sync by construction).
-    fn drag(tool: &mut DragTool, part: HoverPart, from: Point2<f64>, to: Point2<f64>, shift: bool) {
+    fn drag(tool: &mut DragTool, g: HoverGesture, from: Point2<f64>, to: Point2<f64>, shift: bool) {
         let sel = tool.selection.as_mut().unwrap();
-        let gesture = TransformGesture::begin(part, from, sel.snapshot_transform()).unwrap();
+        let gesture = TransformGesture::begin(g, from, sel.snapshot_transform()).unwrap();
         sel.apply_gesture(&gesture, to, shift);
     }
 
@@ -627,7 +608,7 @@ mod tests {
         let east = frame.point(Vector2::new(frame.half.x, 0.0));
         drag(
             &mut tool,
-            HoverPart::Anchor(Anchor::E),
+            HoverGesture::Resize(Anchor::E),
             east,
             Point2::new(east.x + frame.half.x, east.y),
             false,

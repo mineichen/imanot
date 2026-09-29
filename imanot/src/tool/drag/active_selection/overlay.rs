@@ -1,9 +1,9 @@
 use egui::{Color32, CursorIcon, Pos2, Rect as EguiRect, Stroke, Vec2};
 use nalgebra::{Point2, Vector2};
 
-use crate::ImagePainter;
-
 use super::super::frame::{Anchor, Frame};
+use super::ActiveSelection;
+use crate::{ImagePainter, ToolContext};
 
 /// Size of resize anchors and the rotate handle in screen pixels.
 pub(crate) const ANCHOR_SIZE_PX: f32 = 9.0;
@@ -13,13 +13,15 @@ pub(crate) const ANCHOR_HIT_HALF_PX: f32 = 7.0;
 /// Distance of the rotate handle above the bbox top edge in screen pixels.
 pub(crate) const ROTATE_HANDLE_GAP_PX: f32 = 22.0;
 
-/// Which part of the selection overlay the pointer is over.
+/// Which gesture the hovered overlay affords: resize via an anchor,
+/// rotate via the handle, move via selected pixels (or the bare frame
+/// outside the image, where there is no hover pixel to test), or nothing.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub(crate) enum HoverPart {
-    Outside,
-    Inside,
-    Anchor(Anchor),
+pub(crate) enum HoverGesture {
+    Resize(Anchor),
     Rotate,
+    Move,
+    None,
 }
 
 /// Frame corners in screen coordinates: [nw, ne, se, sw].
@@ -52,15 +54,24 @@ pub(crate) fn rotate_handle_image(painter: &ImagePainter, frame: &Frame) -> Poin
     top_mid + out * (f64::from(ROTATE_HANDLE_GAP_PX) / f64::from(painter.render_scale()))
 }
 
-/// Hit-test the overlay, entirely in image coordinates: anchors in frame
-/// space (so rotated boxes hit-test exactly), handle and anchors with
-/// screen-pixel thresholds converted via the render scale.
-pub(crate) fn hit_test(painter: &ImagePainter, screen: Pos2, frame: &Frame) -> HoverPart {
+/// Hit-test the overlay and resolve the afforded gesture: anchors and the
+/// rotate handle hit-test geometrically in frame space (so rotated boxes
+/// work; screen-pixel thresholds via the render scale). Inside the frame,
+/// only a selected pixel affords a move — except outside the image, where
+/// there is no hover pixel to test (a selection dragged off-canvas could
+/// never be grabbed back), so the frame hit alone affords it.
+pub(crate) fn hit_test(
+    ctx: &ToolContext,
+    screen: Pos2,
+    selection: &ActiveSelection,
+) -> HoverGesture {
+    let frame = selection.frame();
+    let painter = &*ctx.painter;
     let img = painter.screen_to_image(screen);
     let p = Point2::new(f64::from(img.x), f64::from(img.y));
     let scale = f64::from(painter.render_scale());
     if (p - rotate_handle_image(painter, frame)).norm() <= f64::from(ANCHOR_SIZE_PX) / scale {
-        return HoverPart::Rotate;
+        return HoverGesture::Rotate;
     }
     let (u, v) = frame.axes();
     let d = p - frame.center;
@@ -69,13 +80,25 @@ pub(crate) fn hit_test(painter: &ImagePainter, screen: Pos2, frame: &Frame) -> H
     for anchor in Anchor::ALL {
         let s = anchor.sides();
         if (lu - s.x * frame.half.x).abs() <= hit && (lv - s.y * frame.half.y).abs() <= hit {
-            return HoverPart::Anchor(anchor);
+            return HoverGesture::Resize(anchor);
         }
     }
-    if lu.abs() <= frame.half.x.abs() && lv.abs() <= frame.half.y.abs() {
-        HoverPart::Inside
+    if lu.abs() > frame.half.x.abs() || lv.abs() > frame.half.y.abs() {
+        return HoverGesture::None;
+    }
+    let pointer = painter.screen_to_image(screen);
+    let (w, h) = ctx.image.image.adjust.dimensions();
+    let (wrange, hrange) = ((0.0)..w.get() as f32, (0.0)..h.get() as f32);
+    if !wrange.contains(&pointer.x) || !hrange.contains(&pointer.y) {
+        return HoverGesture::Move;
+    }
+    let covers = ctx.image.masks.hover_layer().is_some_and(|hovered| {
+        selection.covers_on_layer(hovered, pointer.x as u32, pointer.y as u32)
+    });
+    if covers {
+        HoverGesture::Move
     } else {
-        HoverPart::Outside
+        HoverGesture::None
     }
 }
 
