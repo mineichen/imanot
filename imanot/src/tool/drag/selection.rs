@@ -1,14 +1,16 @@
 use std::iter::{FusedIterator, once};
 
 use egui::Pos2;
-use imask::{ImageDimension, ImaskSet, Roi, SortedRanges, SortedRangesTightSpanBuilder, Span};
+use imask::{
+    ImageDimension, ImaskSet, Roi, SortedRanges, SortedRangesTightSpanBuilder, Span, SpanCluster,
+};
 
 use crate::{
-    AffectedLayer, DragTool, HistoryAction, MaskImage, PixelArea, RectTool,
+    AffectedLayer, DragTool, HistoryAction, MaskImage, PixelArea,
     tool::drag::{
         DragToolSettings, LayerSelection,
         active_selection::{ActiveSelection, ActiveSelectionLogic},
-        transform::{clamp_pixel, cluster_at},
+        transform::clamp_pixel,
     },
 };
 
@@ -216,4 +218,54 @@ where
         let ranges = selected.finish_all().build().ok()?;
         Some((idx, ranges, background))
     })
+}
+
+/// Find the 8-connected cluster of `ranges` containing pixel `(x, y)`.
+/// Returns `None` if no span covers the pixel.
+fn cluster_at(ranges: &SortedRanges<u32>, x: u32, y: u32) -> Option<SpanCluster<u32>> {
+    for cluster in ranges.spans::<u32>().cluster() {
+        // Fast reject on the tight cluster bounds before consuming spans.
+        if cluster.roi().contains(&x, &y)
+            && cluster
+                .clone()
+                .skip_while(|s| s.y < y)
+                .take_while(|s| s.y == y && s.x.start <= x)
+                .any(|s| x < s.x.end)
+        {
+            return Some(cluster);
+        }
+    }
+    None
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::tool::drag::test_support::ranges_from_spans;
+
+    use super::*;
+
+    #[test]
+    fn cluster_at_finds_covering_cluster_only() {
+        let ranges = disjoint_rects();
+        let left = cluster_at(&ranges, 0, 0).unwrap();
+        assert_eq!(left.roi(), Roi::new(0..2, 0..1));
+        assert_eq!(left.clone().count(), 1);
+        let right = cluster_at(&ranges, 6, 3).unwrap();
+        assert_eq!(right.roi(), Roi::new(5..7, 3..4));
+        // Pixels between/outside clusters select nothing.
+        assert!(cluster_at(&ranges, 3, 0).is_none());
+        assert!(cluster_at(&ranges, 0, 5).is_none());
+    }
+
+    #[test]
+    fn cluster_connects_diagonally() {
+        // 8-connectivity: diagonally touching pixels form one cluster.
+        let ranges = ranges_from_spans(&[Span::new(0..1, 0u32), Span::new(1..2, 1u32)]);
+        let cluster = cluster_at(&ranges, 0, 0).unwrap();
+        assert_eq!(cluster.count(), 2);
+    }
+
+    fn disjoint_rects() -> SortedRanges<u32> {
+        ranges_from_spans(&[Span::new(0..2, 0u32), Span::new(5..7, 3u32)])
+    }
 }
