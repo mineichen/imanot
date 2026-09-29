@@ -212,15 +212,14 @@ fn add_history_actions(
     masks: &mut MaskImage,
     mut actions: impl Iterator<Item = HistoryAction>,
 ) -> bool {
-    let r = actions.next().map_or(false, |mut first| {
+    actions.next().is_some_and(|mut first| {
         first.tracked = true;
         masks.add_history_action(first);
         for action in actions {
             masks.add_history_action(action);
         }
         true
-    });
-    r
+    })
 }
 
 fn build_add_untracked(layer: usize, pixel_area: SortedRanges<u32>) -> HistoryAction {
@@ -246,6 +245,7 @@ mod tests {
 
     use super::super::super::test_support::*;
     use super::*;
+    use crate::TestResult;
 
     fn mask_with_rect(x: u16, y: u16) -> (MaskImage, Roi<u16>) {
         let (xu32, yu32) = (u32::from(x), u32::from(y));
@@ -254,7 +254,7 @@ mod tests {
     }
 
     #[test]
-    fn commit_moves_content_and_frame() {
+    fn commit_moves_content_and_frame() -> TestResult {
         let (mut masks, original) = mask_with_rect(10, 10);
         let mut logic = ActiveSelectionLogic::fresh_from_sorted_ranges_iter(
             (0, LayerSelection::fresh(original.into(), None)),
@@ -273,10 +273,11 @@ mod tests {
         );
         let logic = logic
             .commit(&mut masks, IMG_ROI)
-            .expect("moved commit survives");
+            .ok_or("Moved commit survives")?;
         assert_eq!(layer_pixels(&masks), Some(Roi::new(15..20, 10..15).into()));
         assert_eq!(logic.frame.center, Point2::new(17.5, 12.5));
         assert_eq!(logic.frame.half, Vector2::new(2.5, 2.5));
+        Ok(())
     }
 
     #[test]
@@ -306,7 +307,7 @@ mod tests {
     }
 
     #[test]
-    fn shift_add_rebases_snapshot_without_history_write() {
+    fn shift_add_rebases_snapshot_without_history_write() -> TestResult {
         // Shift-add batch: the placed (committed) pixels are baked into a
         // pristine `original` and `total` resets, so later gestures transform
         // old and new content uniformly. No history write: the caller re-arms
@@ -327,7 +328,9 @@ mod tests {
             },
             total * Matrix3::new_translation(&delta),
         );
-        let mut logic = logic.commit(&mut masks, IMG_ROI).unwrap();
+        let mut logic = logic
+            .commit(&mut masks, IMG_ROI)
+            .ok_or("Test commit succeeds")?;
         let added = Roi::new(5..7, 3..4);
         logic.merge_layers(
             std::iter::once((0, added.into(), None)),
@@ -339,10 +342,10 @@ mod tests {
         let placed = Roi::new(5u16..10, 0..1);
         let union = SortedRanges::<u32>::try_from_span_iter(
             placed.into_spans().union(entry.committed.spans()),
-        )
-        .unwrap();
+        )?;
         assert_eq!(entry.original(), &union);
         assert_eq!(logic.total, Matrix3::identity());
         assert_eq!(logic.tip, masks.last_history_action());
+        Ok(())
     }
 }

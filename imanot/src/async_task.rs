@@ -53,7 +53,7 @@ impl<T> AsyncTask<T> {
                     self.0 = Box::pin(std::future::poll_fn(|_| {
                         panic!("The result of AsyncTask mustn't be used after it returned")
                     }));
-                }
+                };
                 Some(r)
             }
             std::task::Poll::Pending => None,

@@ -223,19 +223,14 @@ where
 /// Find the 8-connected cluster of `ranges` containing pixel `(x, y)`.
 /// Returns `None` if no span covers the pixel.
 fn cluster_at(ranges: &SortedRanges<u32>, x: u32, y: u32) -> Option<SpanCluster<u32>> {
-    for cluster in ranges.spans::<u32>().cluster() {
-        // Fast reject on the tight cluster bounds before consuming spans.
-        if cluster.roi().contains(&x, &y)
+    ranges.spans::<u32>().cluster().find(|cluster| {
+        cluster.roi().contains(&x, &y)
             && cluster
                 .clone()
                 .skip_while(|s| s.y < y)
                 .take_while(|s| s.y == y && s.x.start <= x)
                 .any(|s| x < s.x.end)
-        {
-            return Some(cluster);
-        }
-    }
-    None
+    })
 }
 
 #[cfg(test)]

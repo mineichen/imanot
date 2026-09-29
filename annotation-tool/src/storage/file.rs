@@ -1,6 +1,6 @@
 use std::{
     fs::DirEntry,
-    io::{self, ErrorKind, Read, Write},
+    io::{self, Error as IoError, ErrorKind, Read, Write},
     num::{NonZero, NonZeroU32},
     ops::Range,
     path::PathBuf,
@@ -10,7 +10,7 @@ use std::{
 use bytemuck::{AnyBitPattern, NoUninit};
 use futures::{FutureExt, future::BoxFuture};
 use imanot::{ImageData, ImageId, PixelArea, PixelAreaStack, load_image};
-use imask::{ImageDimension, ImaskSet, Rect, Roi, SignedNonZeroable, Span};
+use imask::{ImageDimension, ImaskSet, Roi, SignedNonZeroable, Span};
 use itertools::Itertools;
 use log::info;
 
@@ -97,8 +97,11 @@ impl Storage for FileStorage {
             tx.send(r)
         });
         async move {
-            let r = rx.await.map_err(std::io::Error::other).and_then(|a| a);
-            handle.join().unwrap().expect("Channel cant be gone");
+            let r = rx.await.map_err(IoError::other).and_then(|a| a);
+            handle
+                .join()
+                .expect("Listing thread does not panic")
+                .expect("Channel cant be gone");
             r
         }
         .boxed()
@@ -272,16 +275,16 @@ impl Storage for FileStorage {
                     let sub_len = sub.range_len() as u16;
 
                     f.write_all(&sub_len.to_le_bytes())?;
-                    let bounds = sub.pixels.bounds();
-                    f.write_all(&bounds.x.to_le_bytes())?;
-                    f.write_all(&bounds.y.to_le_bytes())?;
-                    f.write_all(&bounds.width.get().to_le_bytes())?;
-                    f.write_all(&bounds.height.get().to_le_bytes())?;
+                    let bounds = sub.pixels.roi();
+                    f.write_all(&bounds.x.start.to_le_bytes())?;
+                    f.write_all(&bounds.y.start.to_le_bytes())?;
+                    f.write_all(&bounds.width().get().to_le_bytes())?;
+                    f.write_all(&bounds.height().get().to_le_bytes())?;
                     for subgroup in sub.pixels.iter_roi::<Range<u32>>() {
                         f.write_all(&subgroup.start.to_le_bytes())?;
                     }
                     for subgroup in sub.pixels.iter_roi::<Range<u32>>() {
-                        f.write_all(&u32::try_from(subgroup.len()).unwrap().to_le_bytes())?;
+                        f.write_all(&subgroup.end.saturating_sub(subgroup.start).to_le_bytes())?;
                     }
                 }
 

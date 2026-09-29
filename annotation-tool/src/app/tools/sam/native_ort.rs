@@ -38,7 +38,7 @@ impl SamSession {
 
         let session = self.encoder.clone();
         let handle = std::thread::spawn(move || {
-            let mut session = session.lock().unwrap();
+            let mut session = session.lock().expect("Mutex is not poisoned");
             let r = Self::get_image_embeddings_blocking(&mut session, img);
             tx.send(r)
         });
@@ -47,7 +47,10 @@ impl SamSession {
                 .await
                 .map_err(|e| InferenceError::Other(Arc::new(e)))
                 .and_then(|a| a);
-            handle.join().unwrap().expect("Channel cant be gone");
+            handle
+                .join()
+                .expect("SAM thread does not panic")
+                .expect("Channel cant be gone");
             r
         }
     }
@@ -96,7 +99,7 @@ impl SamSession {
         let orig_height = embeddings.original_height.get() as f32;
         let resized_width = embeddings.resized_width.get() as f32;
         let resized_height = embeddings.resized_height.get() as f32;
-        let mut decoder = self.decoder.lock().unwrap();
+        let mut decoder = self.decoder.lock().expect("Mutex is not poisoned");
         let embeddings_as_values = embeddings.image_data.clone();
 
         let x_ratio = resized_width / orig_width;

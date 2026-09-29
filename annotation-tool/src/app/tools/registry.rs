@@ -46,21 +46,17 @@ impl ToolRegistry {
 
     /// Set the primary slot index. Returns the factory if it changed.
     pub fn set_primary_idx(&mut self, idx: usize) -> Option<ToolFactory> {
-        if idx < self.tools.len() && idx != self.primary_idx {
+        (idx < self.tools.len() && idx != self.primary_idx).then(|| {
             self.primary_idx = idx;
-            Some(self.tools[idx].1.clone())
-        } else {
-            None
-        }
+            self.tools[idx].1.clone()
+        })
     }
     /// Set the secondary slot index. Returns the factory if it changed.
     pub fn set_secondary_idx(&mut self, idx: usize) -> Option<ToolFactory> {
-        if idx < self.tools.len() && idx != self.secondary_idx {
+        (idx < self.tools.len() && idx != self.secondary_idx).then(|| {
             self.secondary_idx = idx;
-            Some(self.tools[idx].1.clone())
-        } else {
-            None
-        }
+            self.tools[idx].1.clone()
+        })
     }
 
     pub fn names(&self) -> impl Iterator<Item = &str> {

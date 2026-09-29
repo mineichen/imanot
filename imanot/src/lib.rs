@@ -30,6 +30,9 @@ pub use viewer::*;
 type RgbImageInterleaved<T> = Image<[T; 3], 1>;
 type LocalBoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + 'a>>;
 
+#[cfg(test)]
+pub(crate) type TestResult<T = ()> = Result<T, Box<dyn std::error::Error + Send + Sync>>;
+
 #[derive(PartialEq, Clone, Eq, PartialOrd, Ord, Debug, Hash)]
 pub struct ImageId(Arc<str>);
 
@@ -81,8 +84,8 @@ impl ImageData {
             id: ImageId::from(format!("image{}", i + 1).as_str()),
             masks: PixelAreaStack::default(),
             image: {
-                let width = const { NonZeroU32::new(400).unwrap() };
-                let height = const { NonZeroU32::new(400).unwrap() };
+                let width = const { NonZeroU32::new(400).expect("400 is not zero") };
+                let height = const { NonZeroU32::new(400).expect("400 is not zero") };
                 let square_size = width.get() / 8;
                 let (color_1, color_2) = if i == 0 { (0, 255) } else { (255, 0) };
 

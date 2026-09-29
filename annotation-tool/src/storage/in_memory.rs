@@ -29,7 +29,7 @@ impl InMemoryStorage {
 
 impl Storage for InMemoryStorage {
     fn list_images(&self) -> BoxFuture<'static, io::Result<Vec<ImageListTaskItem>>> {
-        let data = self.data.lock().unwrap();
+        let data = self.data.lock().expect("Mutex is not poisoned");
         let result = data
             .iter()
             .map(|(id, data)| {
@@ -53,7 +53,7 @@ impl Storage for InMemoryStorage {
         let data = self
             .data
             .lock()
-            .unwrap()
+            .expect("Mutex is not poisoned")
             .get(&id)
             .cloned()
             .ok_or_else(|| std::io::Error::other(format!("Unknown image_id {id:?}")));
@@ -65,7 +65,7 @@ impl Storage for InMemoryStorage {
         id: &ImageId,
         masks: &PixelAreaStack,
     ) -> BoxFuture<'static, io::Result<()>> {
-        if let Some(x) = self.data.lock().unwrap().get_mut(id) {
+        if let Some(x) = self.data.lock().expect("Mutex is not poisoned").get_mut(id) {
             x.masks = masks.clone();
         };
         async move {

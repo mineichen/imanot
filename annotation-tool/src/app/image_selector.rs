@@ -142,6 +142,7 @@ impl ImageSelector {
                 }
             }
         }
-        reset_image_state.and_then(|x| Some(self.values.as_ref().ok()?[x].id.clone()))
+        let x = reset_image_state?;
+        Some(self.values.as_ref().ok()?[x].id.clone())
     }
 }

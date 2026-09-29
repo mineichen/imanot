@@ -56,7 +56,7 @@ impl Tool for SamTool {
                     bottom_y as f32,
                     loaded_embeddings,
                 )
-                .unwrap();
+                .expect("Decoder runs on embeddings produced by the encoder");
 
             let width = ctx.image.image.original.width();
             let height = ctx.image.image.original.height();

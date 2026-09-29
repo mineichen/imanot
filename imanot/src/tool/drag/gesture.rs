@@ -204,6 +204,7 @@ fn locked_halves(base_half: Vector2<f64>, s: Vector2<f64>, d: Vector2<f64>) -> V
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::TestResult;
     use nalgebra::Vector3;
 
     fn square() -> Frame {
@@ -226,26 +227,29 @@ mod tests {
         Point2::new(x, y)
     }
 
-    fn resize(anchor: Anchor, start: Point2<f64>, base: Frame) -> TransformGesture {
+    fn resize(anchor: Anchor, start: Point2<f64>, base: Frame) -> TestResult<TransformGesture> {
         let part = HoverGesture::Resize(anchor);
-        TransformGesture::begin(part, start, (base, Matrix3::identity())).unwrap()
+        TransformGesture::begin(part, start, (base, Matrix3::identity()))
+            .ok_or("Test gesture starts inside the frame".into())
     }
 
     #[test]
-    fn move_snaps_to_whole_pixels() {
+    fn move_snaps_to_whole_pixels() -> TestResult {
         // App drag deltas are fractional, but masks live on whole pixels.
         let base = (square(), Matrix3::identity());
-        let gesture = TransformGesture::begin(HoverGesture::Move, pt(15.0, 12.5), base).unwrap();
+        let gesture = TransformGesture::begin(HoverGesture::Move, pt(15.0, 12.5), base)
+            .ok_or("Test gesture starts inside the frame")?;
         let (frame, total) = gesture.apply(pt(44.5, 32.5), false);
         assert_eq!(total, Matrix3::new_translation(&Vector2::new(30.0, 20.0)));
         assert_eq!(frame.center, pt(42.5, 32.5));
+        Ok(())
     }
 
     #[test]
-    fn resize_mirror_and_minimum_magnitude() {
+    fn resize_mirror_and_minimum_magnitude() -> TestResult {
         // Drag the E anchor (15, 12.5) west past the W edge (10) to (5, 12.5):
         // half flips sign, pivot stays, dragged anchor follows the cursor.
-        let gesture = resize(Anchor::E, pt(15.0, 12.5), square());
+        let gesture = resize(Anchor::E, pt(15.0, 12.5), square())?;
         let (frame, total) = gesture.apply(pt(5.0, 12.5), false);
         assert_eq!(frame.half.x, -2.5);
         assert_eq!(frame.center.x, 7.5);
@@ -260,14 +264,15 @@ mod tests {
         // Drag E exactly onto the W edge: raw half 0 snaps to +0.5 (1px);
         // a touch further flips to -0.5, never a degenerate zero frame.
         for (to, half) in [(10.0, 0.5), (9.0, -0.5)] {
-            let gesture = resize(Anchor::E, pt(15.0, 12.5), square());
+            let gesture = resize(Anchor::E, pt(15.0, 12.5), square())?;
             let (frame, _) = gesture.apply(pt(to, 12.5), false);
             assert_eq!(frame.half.x, half);
         }
+        Ok(())
     }
 
     #[test]
-    fn corner_resize_locks_aspect_ratio() {
+    fn corner_resize_locks_aspect_ratio() -> TestResult {
         // 10x5 content (center (15, 12.5), half (5, 2.5)): dragging the SE
         // corner scales both axes by one factor, picked so the cursor stays
         // on a visible edge segment.
@@ -276,26 +281,28 @@ mod tests {
             ((22.5, 20.0), (10.0, 5.0), (20.0, 15.0)),
             ((24.0, 17.5), (7.5, 3.75), (17.5, 13.75)),
         ] {
-            let gesture = resize(Anchor::Se, pt(20.0, 15.0), wide());
+            let gesture = resize(Anchor::Se, pt(20.0, 15.0), wide())?;
             let (frame, _) = gesture.apply(pt(to.0, to.1), false);
             assert_eq!(frame.half, Vector2::new(half.0, half.1));
             assert_eq!(frame.center, pt(center.0, center.1));
         }
         // Pivot (NW corner) fixed by the total matrix.
-        let gesture = resize(Anchor::Se, pt(20.0, 15.0), wide());
+        let gesture = resize(Anchor::Se, pt(20.0, 15.0), wide())?;
         let (_, total) = gesture.apply(pt(25.0, 15.0), false);
         let p = total * Vector3::new(10.0, 10.0, 1.0);
         assert!((p.x - 10.0).abs() < 1e-9, "{p:?}");
         assert!((p.y - 10.0).abs() < 1e-9, "{p:?}");
+        Ok(())
     }
 
     #[test]
-    fn shift_corner_resize_destroys_aspect_ratio() {
+    fn shift_corner_resize_destroys_aspect_ratio() -> TestResult {
         // Holding Shift frees the corner anchors: each axis follows the
         // pointer independently, like edge anchors always do.
-        let gesture = resize(Anchor::Se, pt(20.0, 15.0), wide());
+        let gesture = resize(Anchor::Se, pt(20.0, 15.0), wide())?;
         let (frame, _) = gesture.apply(pt(25.0, 15.0), true);
         assert_eq!(frame.half, Vector2::new(7.5, 2.5));
         assert_eq!(frame.center, pt(17.5, 12.5));
+        Ok(())
     }
 }

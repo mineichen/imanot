@@ -26,6 +26,7 @@ mod tests {
     use super::super::frame::{rotate_about, scale_about_frame};
     use super::super::test_support::*;
     use super::*;
+    use crate::TestResult;
 
     use nalgebra::{Point2, Vector2};
 
@@ -47,7 +48,7 @@ mod tests {
     }
 
     #[test]
-    fn transform_clipping() {
+    fn transform_clipping() -> TestResult {
         // Fully outside → nothing visible; partially outside → clipped to
         // the image.
 
@@ -66,47 +67,55 @@ mod tests {
             &Matrix3::new_translation(&Vector2::new(3.0, 3.0)),
             IMG_ROI,
         )
-        .unwrap();
+        .ok_or("Clipped transform stays visible")?;
         let bounds = clipped.roi();
         assert_eq!((bounds.x.start, bounds.y.start), (98, 98));
         assert!(bounds.x.end <= 100);
         assert!(bounds.y.end <= 100);
+        Ok(())
     }
 
     #[test]
-    fn multi_commit_from_original_avoids_chaining() {
+    fn multi_commit_from_original_avoids_chaining() -> TestResult {
         // Move, then rotate, both computed from the original: the result must
         // equal a single composed transform of the original.
         let original = Roi::new(40..50, 40..50);
         let shift = Matrix3::new_translation(&Vector2::new(5.0, 0.0));
-        let after_move = transform_layer(original.into_spans(), &shift, IMG_ROI).unwrap();
+        let after_move =
+            transform_layer(original.into_spans(), &shift, IMG_ROI).ok_or("Shift stays visible")?;
         let total = rotate_about(Point2::new(50.0, 45.0), std::f64::consts::FRAC_PI_2) * shift;
-        let from_original = transform_layer(original.into_spans(), &total, IMG_ROI).unwrap();
+        let from_original = transform_layer(original.into_spans(), &total, IMG_ROI)
+            .ok_or("Rotated stays visible")?;
         // Chaining (rotate the already-rasterized move result) must not be
         // what the tool commits; it must equal the direct transform.
         let delta = rotate_about(Point2::new(50.0, 45.0), std::f64::consts::FRAC_PI_2);
-        let chained = transform_layer(after_move.spans(), &delta, IMG_ROI).unwrap();
+        let chained =
+            transform_layer(after_move.spans(), &delta, IMG_ROI).ok_or("Chained stays visible")?;
         assert_eq!(from_original, chained);
+        Ok(())
     }
 
     #[test]
-    fn rotate_ninety_degrees_swaps_dimensions() {
+    fn rotate_ninety_degrees_swaps_dimensions() -> TestResult {
         // The rasterized 90° rotation of a centered 10x20 rect is 20x10.
         // Uses the production `rotate_about` helper, not a test-only matrix.
         let original = Roi::new(40..50, 40..60);
         let m = rotate_about(Point2::new(45.0, 50.0), std::f64::consts::FRAC_PI_2);
-        let out = transform_layer(original.into_spans(), &m, IMG_ROI).unwrap();
+        let out =
+            transform_layer(original.into_spans(), &m, IMG_ROI).ok_or("Rotation stays visible")?;
         let bounds = out.roi();
         assert_eq!(bounds.width().get(), 20);
         assert_eq!(bounds.height().get(), 10);
+        Ok(())
     }
 
     #[test]
-    fn mirror_transform_preserves_width_on_mirrored_side() {
+    fn mirror_transform_preserves_width_on_mirrored_side() -> TestResult {
         // Horizontal mirror about the west edge (x=10) of a 5px rect.
         let original = Roi::new(10..15, 10..15);
         let m = scale_about_frame(Point2::new(10.0, 12.5), 0.0, Vector2::new(-1.0, 1.0));
-        let out = transform_layer(original.into_spans(), &m, IMG_ROI).unwrap();
+        let out =
+            transform_layer(original.into_spans(), &m, IMG_ROI).ok_or("Mirror stays visible")?;
         let bounds = out.roi();
         assert_eq!(bounds.width().get(), 5);
         assert_eq!(bounds.height().get(), 5);
@@ -114,5 +123,6 @@ mod tests {
         // discretization lands it up to 1px overlapping, hence `<= 11`).
         assert!(bounds.x.start < 10, "{bounds:?}");
         assert!(bounds.x.end <= 11, "{bounds:?}");
+        Ok(())
     }
 }

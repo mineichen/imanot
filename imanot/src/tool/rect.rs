@@ -3,9 +3,8 @@ use std::{
     sync::Arc,
 };
 
-use egui::Key::W;
 use futures::FutureExt;
-use imask::{Roi, SortedRanges, Span};
+use imask::{SortedRanges, Span};
 
 use crate::{
     AffectedLayer, CursorImage, DrawTool, MaskActionBuilder, MaskDefaultActions, Mode,
@@ -58,24 +57,17 @@ impl Tool for RectTool {
         ctx.cursor_image.set(RECT_CURSOR_IMAGE);
 
         let selection = self.rect_selection.drag_finished(&mut ctx);
-        if let Some(rect_result) = selection {
+        if let Some(rect_ranges) = selection.and_then(|x| Some(x.rect().ok()?.into())) {
             match self.mode {
                 Mode::Insert => {
-                    if let Ok(pixel_area) =
-                        SortedRanges::try_from_span_iter(rect_result.rect().into_spans())
-                    {
-                        ctx.image
-                            .masks
-                            .on_layer(self.layer)
-                            .keep_overlapping(!matches!(self.layer, AffectedLayer::Unspecified))
-                            .add(pixel_area);
-                    }
-                }
-                Mode::Clear => {
                     ctx.image
                         .masks
                         .on_layer(self.layer)
-                        .clear(rect_result.rect().into_spans());
+                        .keep_overlapping(!matches!(self.layer, AffectedLayer::Unspecified))
+                        .add(rect_ranges);
+                }
+                Mode::Clear => {
+                    ctx.image.masks.on_layer(self.layer).clear(rect_ranges);
                 }
             }
         } else if ctx.response.clicked()
@@ -96,9 +88,9 @@ impl Tool for RectTool {
                 return;
             };
             let span = Span::new(x..x + 1, y);
+            let ranges = SortedRanges::<u32>::from(span);
             match self.mode {
                 Mode::Insert => {
-                    let ranges = SortedRanges::<u32>::from(span);
                     ctx.image
                         .masks
                         .on_layer(self.layer)
@@ -106,11 +98,7 @@ impl Tool for RectTool {
                         .add(ranges);
                 }
                 Mode::Clear => {
-                    let rect = Roi::from(Span::<u32>::from(span));
-                    ctx.image
-                        .masks
-                        .on_layer(self.layer)
-                        .clear(rect.into_spans());
+                    ctx.image.masks.on_layer(self.layer).clear(ranges);
                 }
             }
         }

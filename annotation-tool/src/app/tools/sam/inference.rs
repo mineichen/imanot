@@ -22,9 +22,6 @@ pub type SamInputData = ResizedImageData<ArrayBase<OwnedRepr<f32>, Dim<IxDynImpl
 
 #[derive(Debug, thiserror::Error, Clone)]
 pub enum InferenceError {
-    #[error("Allocation: {0:?}")]
-    AllocationError(Arc<dyn std::error::Error + Send + Sync>),
-
     #[error("Other: {0:?}")]
     Other(Arc<dyn std::error::Error + Send + Sync>),
 
@@ -79,9 +76,9 @@ pub(super) fn prepare_image_input(
         .pixels()
         .chunks(img_resized.width() as _)
         .into_iter()
-        .zip(r.chunks_exact_mut(1024))
-        .zip(g.chunks_exact_mut(1024))
-        .zip(b.chunks_exact_mut(1024))
+        .zip(r.as_chunks_mut::<1024>().0)
+        .zip(g.as_chunks_mut::<1024>().0)
+        .zip(b.as_chunks_mut::<1024>().0)
     {
         for ((((_, _, Rgba([r, g, b, _])), r_dest), g_dest), b_dest) in
             input_chunk.zip(r_chunk).zip(g_chunk).zip(b_chunk)
@@ -115,7 +112,9 @@ pub(super) fn extract_pixel_ranges(
             result.push(NonZeroRange::from_span(first, NonZeroU64::MIN));
             b.fold(first, |last, x| {
                 if x - 1 == last {
-                    let item = result.last_mut().unwrap();
+                    let item = result
+                        .last_mut()
+                        .expect("result just received a push in this iteration");
                     item.increment_length();
                 } else {
                     result.push(NonZeroRange::from_span(x, NonZeroU64::MIN));
@@ -153,7 +152,7 @@ mod tests {
 
     use super::*;
 
-    const NON_ZERO_3: NonZero<u32> = NonZero::new(3).unwrap();
+    const NON_ZERO_3: NonZero<u32> = NonZero::new(3).expect("3 is not zero");
 
     #[test]
     fn extract_pixel_ranges_summarizes_pixels() {

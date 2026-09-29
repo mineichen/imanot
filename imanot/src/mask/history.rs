@@ -189,7 +189,7 @@ impl History {
         if self.is_dirty() {
             self.mark_not_dirty();
             self.undo_redo_layer
-                .or_else(|| self.iter().rev().next().map(|a| a.layer))
+                .or_else(|| self.iter().next_back().map(|a| a.layer))
         } else {
             None
         }

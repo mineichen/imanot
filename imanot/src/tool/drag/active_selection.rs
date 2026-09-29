@@ -157,23 +157,23 @@ mod tests {
 
     use super::super::test_support::*;
     use super::*;
+    use crate::TestResult;
 
     /// Layer with a 10x5 block at (10,10) plus a disjoint 10x5 outsider
     /// block at (40,30).
-    fn mask_with_outsiders() -> (MaskImage, Roi<u16>, Roi<u16>) {
+    fn mask_with_outsiders() -> TestResult<(MaskImage, Roi<u16>, Roi<u16>)> {
         let block = Roi::new(10u16..20, 10..15);
         let outsiders = Roi::new(40u16..50, 30..35);
         let combined =
-            SortedRanges::try_from_span_iter(block.into_spans().union(outsiders.into_spans()))
-                .unwrap();
-        (mask(combined), block, outsiders)
+            SortedRanges::try_from_span_iter(block.into_spans().union(outsiders.into_spans()))?;
+        Ok((mask(combined), block, outsiders))
     }
 
     #[test]
-    fn commit_keeps_preview_alive() {
+    fn commit_keeps_preview_alive() -> TestResult {
         // Dropping the selection at a new position must not re-rasterize:
         // the placed pixels are exactly what the preview already shows.
-        let (mut masks, block, outsiders) = mask_with_outsiders();
+        let (mut masks, block, outsiders) = mask_with_outsiders()?;
         let mut selection =
             ActiveSelection::from_logic(ActiveSelectionLogic::fresh_from_sorted_ranges_iter(
                 (
@@ -193,11 +193,12 @@ mod tests {
         // Move by 5px, as a finished Move gesture would.
         let (frame, total) = selection.snapshot_transform();
         let press = frame.center;
-        let gesture = TransformGesture::begin(HoverGesture::Move, press, (frame, total)).unwrap();
+        let gesture = TransformGesture::begin(HoverGesture::Move, press, (frame, total))
+            .ok_or("Test gesture starts inside the frame")?;
         selection.apply_gesture(&gesture, press + Vector2::new(5.0, 0.0), false);
         let selection = selection
             .commit_transform(&mut masks, IMG_ROI)
-            .expect("moved commit survives");
+            .ok_or("Moved commit survives")?;
         // Pixels landed (moved block + untouched outsiders), and the preview
         // survived the drop. (Span comparison: the mask keeps the coordinate
         // frame's bounds, not tight ones.)
@@ -205,13 +206,13 @@ mod tests {
             Roi::new(15u16..25, 10..15)
                 .into_spans()
                 .union(Roi::new(40u16..50, 30..35).into_spans()),
-        )
-        .unwrap();
+        )?;
         assert_eq!(
             layer_pixels(&masks).map(|p| p.spans::<u32>().collect::<Vec<_>>()),
             Some(expected.spans::<u32>().collect())
         );
         assert!(outsider_block_ok(&masks));
         assert!(selection.preview.is_visible());
+        Ok(())
     }
 }

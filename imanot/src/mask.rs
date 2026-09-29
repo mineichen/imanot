@@ -65,7 +65,7 @@ pub struct MaskImage {
 }
 struct LoadedMaskImage {
     visible: bool,
-    #[allow(dead_code, reason = "Keeps GPU buffer alive")]
+    #[expect(dead_code, reason = "Keeps GPU buffer alive")]
     handle: TextureHandle,
     source: ImageSource<'static>,
 }
@@ -270,14 +270,14 @@ impl MaskImage {
             let max_x = self.size[0] as u32;
             let max_y = self.size[1] as u32;
             let ranges_bounds = match &action.kind {
-                HistoryActionKind::Add(add) => Some(add.pixel_area.bounds()),
-                HistoryActionKind::Clear(clear) => Some(clear.ranges.bounds()),
-                HistoryActionKind::Replace(replace) => Some(replace.pixel_area.bounds()),
+                HistoryActionKind::Add(add) => Some(add.pixel_area.roi()),
+                HistoryActionKind::Clear(clear) => Some(clear.ranges.roi()),
+                HistoryActionKind::Replace(replace) => Some(replace.pixel_area.roi()),
                 HistoryActionKind::Reset => None,
             };
             if let Some(b) = ranges_bounds {
                 assert!(
-                    b.x + b.width.get() <= max_x && b.y + b.height.get() <= max_y,
+                    b.x.end <= max_x && b.y.end <= max_y,
                     "Tool wrote SortedRanges at {:?} exceeding image bounds {}x{}",
                     b,
                     max_x,
@@ -400,9 +400,7 @@ impl MaskImage {
     pub fn layer_color(&self, index: usize) -> Option<[u8; 4]> {
         self.base.layer_color(index)
     }
-    fn subgroups_ordered_spans(
-        &self,
-    ) -> impl Iterator<Item = (usize, Span<u32>)> + FusedIterator + '_ {
+    fn subgroups_ordered_spans(&self) -> impl FusedIterator<Item = (usize, Span<u32>)> + '_ {
         struct HeapItem<T>(Span<u32>, usize, T);
 
         impl<T> Eq for HeapItem<T> {}
@@ -424,19 +422,15 @@ impl MaskImage {
             }
         }
 
-        struct GroupIterator<'a>(
-            BinaryHeap<
-                HeapItem<
-                    SortedRangesSpanIter<
-                        SortedRangesIter<
-                            std::iter::Copied<std::slice::Iter<'a, u32>>,
-                            std::iter::Copied<std::slice::Iter<'a, u32>>,
-                            NonZeroRange<u32>,
-                        >,
-                    >,
-                >,
+        type SpanIter<'a> = SortedRangesSpanIter<
+            SortedRangesIter<
+                std::iter::Copied<std::slice::Iter<'a, u32>>,
+                std::iter::Copied<std::slice::Iter<'a, u32>>,
+                NonZeroRange<u32>,
             >,
-        );
+        >;
+        type GroupHeap<'a> = BinaryHeap<HeapItem<SpanIter<'a>>>;
+        struct GroupIterator<'a>(GroupHeap<'a>);
 
         let x: BinaryHeap<_> = self
             .subgroups_stack()
@@ -506,9 +500,7 @@ pub trait MaskActionBuilder<'a>: Sized {
 
 pub trait MaskDefaultActions: Sized {
     fn add(self, ranges: SortedRanges<u32>);
-    fn clear<I>(self, ranges: I)
-    where
-        I: Iterator<Item = Span<u32>> + ImageDimension;
+    fn clear(self, ranges: SortedRanges<u32>);
     fn reset(self);
 }
 
@@ -566,12 +558,12 @@ impl<'a, A> MaskActionBuilder<'a> for HistoryActionBuilder<'a, A> {
     }
 }
 
-impl<'a> MaskDefaultActions for &'a mut MaskImage {
+impl MaskDefaultActions for &mut MaskImage {
     fn add(self, subgroups: SortedRanges<u32>) {
         self.keep_overlapping(true).add(subgroups);
     }
 
-    fn clear<I: Iterator<Item = Span<u32>> + ImageDimension>(self, ranges: I) {
+    fn clear(self, ranges: SortedRanges<u32>) {
         HistoryActionBuilder {
             mask: self,
             layer: AffectedLayer::Unspecified,
@@ -597,11 +589,9 @@ impl<'a> MaskDefaultActions for HistoryActionBuilder<'a, ()> {
         self.keep_overlapping(true).add(subgroups);
     }
 
-    fn clear<I: Iterator<Item = Span<u32>> + ImageDimension>(self, ranges: I) {
+    fn clear(self, ranges: SortedRanges<u32>) {
         self.mask.add_history_action(HistoryAction {
-            kind: HistoryActionKind::Clear(HistoryActionClear {
-                ranges: SortedRanges::try_from_span_iter(ranges).unwrap(),
-            }),
+            kind: HistoryActionKind::Clear(HistoryActionClear { ranges }),
             layer: self.layer,
             tracked: self.tracked,
         });
@@ -616,7 +606,7 @@ impl<'a> MaskDefaultActions for HistoryActionBuilder<'a, ()> {
     }
 }
 
-impl<'a> HistoryActionBuilder<'a, AddAction> {
+impl HistoryActionBuilder<'_, AddAction> {
     pub fn add(self, subgroups: SortedRanges<u32>) {
         let subgroups = if self.action.overlapping {
             subgroups
@@ -749,17 +739,13 @@ fn prepare_layer_space(layers: &mut Vec<Layer>, idx: usize) -> &mut Layer {
 
 #[cfg(test)]
 mod tests {
-    use imask::{ImaskSet, Rect};
+    use imask::{ImaskSet, Roi};
 
     use super::*;
+    use crate::TestResult;
     use std::num::NonZero;
 
-    const NON_ZERO_1: NonZero<u32> = NonZero::<u32>::MIN;
-    const NON_ZERO_2: NonZero<u32> = NonZero::new(2).unwrap();
-    const NON_ZERO_4: NonZero<u32> = NonZero::new(4).unwrap();
-    const NON_ZERO_5: NonZero<u32> = NonZero::new(5).unwrap();
-
-    const WIDTH_10: NonZero<u32> = NonZero::new(10).unwrap();
+    const WIDTH_10: NonZero<u32> = NonZero::new(10).expect("10 is not zero");
 
     fn mask_10(init: impl Into<PixelAreaStack>) -> MaskImage {
         MaskImage::new([10, 10], init, History::default())
@@ -822,7 +808,7 @@ mod tests {
         mask_image.add(SortedRanges::from(Span::new(2..8, 0)));
         mask_image
             .on_layer(AffectedLayer::Range(0, Some(2)))
-            .clear(Rect::new(0, 0, NON_ZERO_4, NON_ZERO_1).into_spans());
+            .clear(Roi::new(0..4, 0..1).into());
         assert_eq!(
             mask_image.subgroup_spans_flat().collect::<Vec<_>>(),
             vec![(0, Span::new(4..9, 0)), (1, Span::new(4..8, 0)),]
@@ -853,18 +839,18 @@ mod tests {
             rng ^= rng << 17;
             rng
         };
-        let mut pixels: Vec<u32> = (0..1000)
-            .map(|_| {
-                let x = next();
-                let a = x as u8;
-                u32::from_le_bytes([
-                    ((x >> 24) as u8).min(a),
-                    ((x >> 16) as u8).min(a),
-                    ((x >> 8) as u8).min(a),
-                    a,
-                ])
-            })
-            .collect();
+        let mut pixels: Vec<u32> = std::iter::repeat_with(|| {
+            let x = next();
+            let a = x as u8;
+            u32::from_le_bytes([
+                ((x >> 24) as u8).min(a),
+                ((x >> 16) as u8).min(a),
+                ((x >> 8) as u8).min(a),
+                a,
+            ])
+        })
+        .take(1000)
+        .collect();
         let expected = {
             let mut e = pixels.clone();
             let a = ((next() >> 8) % 256) as u8;
@@ -936,7 +922,7 @@ mod tests {
         let ranges = SortedRanges::from(Span::new(2..8, 0));
         mask_image.add(ranges);
 
-        mask_image.clear(Rect::new(0, 0, NON_ZERO_4, NON_ZERO_1).into_spans());
+        mask_image.clear(Roi::new(0..4, 0..1).into());
 
         assert_eq!(
             mask_image.subgroup_spans_flat().collect::<Vec<_>>(),
@@ -953,7 +939,7 @@ mod tests {
         let ranges = SortedRanges::from(Span::new(1..9, 0));
         mask_image.add(ranges);
 
-        mask_image.clear(Rect::new(5, 0, NON_ZERO_5, NON_ZERO_1).into_spans());
+        mask_image.clear(Roi::new(5..10, 0..1).into());
 
         assert_eq!(
             mask_image.subgroup_spans_flat().collect::<Vec<_>>(),
@@ -970,7 +956,7 @@ mod tests {
         let ranges = SortedRanges::from(Span::new(2..8, 0));
         mask_image.add(ranges);
 
-        mask_image.clear(Rect::new(4, 0, NON_ZERO_2, NON_ZERO_1).into_spans());
+        mask_image.clear(Roi::new(4..6, 0..1).into());
 
         assert_eq!(
             mask_image.subgroup_spans_flat().collect::<Vec<_>>(),
@@ -984,7 +970,7 @@ mod tests {
     }
 
     #[test]
-    fn iter_sorted() {
+    fn iter_sorted() -> TestResult {
         let history = History::default();
         let mut x = MaskImage::new(
             [10, 10],
@@ -992,7 +978,7 @@ mod tests {
                 PixelArea::with_black_color(
                     [Span::new(2..7, 0), Span::new(2..7, 1)].with_bounds(WIDTH_10, WIDTH_10),
                 )
-                .unwrap(),
+                .ok_or("Test spans are valid")?,
                 PixelArea {
                     pixels: SortedRanges::from(Span::new(2..7, 3)),
                     color: [0, 0, 0, 255],
@@ -1000,36 +986,33 @@ mod tests {
             ],
             history,
         );
-        x.add(
-            SortedRanges::try_from_span_iter(
-                [
-                    Span::new(2u32..9, 2),
-                    Span::new(9..10, 3),
-                    Span::new(2..9, 4),
-                ]
-                .with_bounds(WIDTH_10, WIDTH_10),
-            )
-            .unwrap(),
-        );
+        x.add(SortedRanges::try_from_span_iter(
+            [
+                Span::new(2u32..9, 2),
+                Span::new(9..10, 3),
+                Span::new(2..9, 4),
+            ]
+            .with_bounds(WIDTH_10, WIDTH_10),
+        )?);
         let group_sequence: Vec<_> = x
             .subgroups_ordered_spans()
             .map(|(group_id, _)| group_id)
             .collect();
         assert_eq!(group_sequence, vec![0, 0, 2, 1, 2, 2]);
+        Ok(())
     }
 
     #[test]
-    fn non_overlapping_no_pixel_overlap_with_multiple_layers() {
+    fn non_overlapping_no_pixel_overlap_with_multiple_layers() -> TestResult {
         let mut mask_image = MaskImage::new([10, 10], vec![], History::default());
 
         let layer0 = SortedRanges::try_from_span_iter(
             [Span::new(0u32..5, 0), Span::new(2..5, 1)].with_bounds(WIDTH_10, WIDTH_10),
-        )
-        .unwrap();
+        )?;
         mask_image.add(layer0);
 
         let spans1 = [Span::new(0u32..5, 3), Span::new(0..3, 5)].with_bounds(WIDTH_10, WIDTH_10);
-        let layer1 = SortedRanges::try_from_span_iter(spans1).unwrap();
+        let layer1 = SortedRanges::try_from_span_iter(spans1)?;
         mask_image.add(layer1);
 
         let new_mask = SortedRanges::try_from_span_iter(
@@ -1041,8 +1024,7 @@ mod tests {
                 Span::new(0..4, 5),
             ]
             .with_bounds(WIDTH_10, WIDTH_10),
-        )
-        .unwrap();
+        )?;
         mask_image.keep_overlapping(false).add(new_mask);
 
         let subgroups = mask_image.subgroups_stack();
@@ -1060,7 +1042,7 @@ mod tests {
 
         let new_layer_pixels: Vec<u64> = subgroups_iter
             .next()
-            .unwrap()
+            .ok_or("Test setup adds three layers")?
             .1
             .pixels
             .iter_roi::<std::ops::Range<u64>>()
@@ -1073,6 +1055,7 @@ mod tests {
                 "Pixel {pixel} exists in both new layer and existing layers"
             );
         }
+        Ok(())
     }
 
     #[test]

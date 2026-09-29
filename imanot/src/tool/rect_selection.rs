@@ -1,7 +1,7 @@
-use std::num::{NonZero, NonZeroU32, NonZeroUsize};
+use std::num::{NonZeroU32, NonZeroUsize, TryFromIntError};
 
 use egui::Pos2;
-use imask::Rect;
+use imask::Roi;
 
 use crate::ToolContext;
 
@@ -21,20 +21,16 @@ impl RectSelectionResult {
         image_width: NonZeroU32,
         image_height: NonZeroU32,
     ) -> Option<Self> {
-        if max_x > min_x
+        (max_x > min_x
             && max_y > min_y
-            && max_x < usize::try_from(image_width.get()).expect("Width is < usize::MAX")
-            && max_y < usize::try_from(image_height.get()).expect("Height is < usize::MAX")
-        {
-            Some(Self {
-                min_x,
-                min_y,
-                max_x,
-                max_y,
-            })
-        } else {
-            None
-        }
+            && max_x < usize::try_from(image_width.get()).ok()?
+            && max_y < usize::try_from(image_height.get()).ok()?)
+        .then_some(Self {
+            min_x,
+            min_y,
+            max_x,
+            max_y,
+        })
     }
 
     pub fn width(&self) -> NonZeroUsize {
@@ -51,15 +47,11 @@ impl RectSelectionResult {
         [[self.min_x, self.min_y], [self.max_x, self.max_y]]
     }
 
-    pub fn rect(&self) -> Rect<u32> {
-        let width = NonZero::new((self.max_x - self.min_x) as u32 + 1).unwrap();
-        let height = NonZero::new((self.max_y - self.min_y) as u32 + 1).unwrap();
-        Rect::new(
-            self.min_x.try_into().unwrap(),
-            self.min_y.try_into().unwrap(),
-            width,
-            height,
-        )
+    pub fn rect(&self) -> Result<Roi<u16>, TryFromIntError> {
+        Ok(Roi::new(
+            u16::try_from(self.min_x)?..u16::try_from(self.max_x + 1)?,
+            u16::try_from(self.min_y)?..u16::try_from(self.max_y + 1)?,
+        ))
     }
 }
 

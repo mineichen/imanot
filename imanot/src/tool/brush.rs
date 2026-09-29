@@ -6,7 +6,7 @@ use std::{
 
 use egui::{Color32, ColorImage, TextureHandle, TextureOptions};
 use futures::FutureExt;
-use imask::{BitmapToSpanIter, Rect, SortedRanges, WithRoi};
+use imask::{BitmapToSpanIter, Roi, SortedRanges, WithRoi};
 
 use crate::{
     AffectedLayer, DrawTool, ImagePainter, MaskActionBuilder, MaskDefaultActions, Mode, Tool,
@@ -23,7 +23,7 @@ struct StrokeState {
     mask: Vec<bool>,
     last_pos: Option<(usize, usize)>,
     texture: Option<TextureHandle>,
-    dirty: Option<Rect<usize>>,
+    dirty: Option<Roi<usize>>,
 }
 
 impl StrokeState {
@@ -47,11 +47,9 @@ impl StrokeState {
         image_width: NonZero<u32>,
         image_height: NonZero<u32>,
     ) -> WithRoi<BitmapToSpanIter<std::iter::Copied<std::slice::Iter<'_, bool>>>> {
-        let bounds = Rect::new(
-            self.min_x as u32,
-            self.min_y as u32,
-            NonZero::new((self.max_x - self.min_x + 1) as u32).unwrap(),
-            NonZero::new((self.max_y - self.min_y + 1) as u32).unwrap(),
+        let bounds = Roi::new(
+            self.min_x as u32..(self.max_x as u32 + 1),
+            self.min_y as u32..(self.max_y as u32 + 1),
         );
         WithRoi::new(
             BitmapToSpanIter::from_bool_iter(self.mask.iter().copied(), image_width, image_height),
@@ -68,6 +66,8 @@ impl StrokeState {
         for py in y_min..=y_max {
             let row = py * self.width;
             for px in x_min..=x_max {
+                // SAFETY: `x_max` and `y_max` are clamped to `width - 1` / `height - 1`,
+                // so `row + px < width * height == self.mask.len()`.
                 unsafe {
                     *self.mask.get_unchecked_mut(row + px) = true;
                 }
@@ -79,12 +79,7 @@ impl StrokeState {
         self.min_y = self.min_y.min(y_min);
         self.max_y = self.max_y.max(y_max);
 
-        let stamp_rect = Rect::new(
-            x_min,
-            y_min,
-            NonZero::new(x_max - x_min + 1).unwrap(),
-            NonZero::new(y_max - y_min + 1).unwrap(),
-        );
+        let stamp_rect = Roi::new(x_min..x_max + 1, y_min..y_max + 1);
         self.dirty = Some(match self.dirty {
             Some(d) => d.union(&stamp_rect),
             None => stamp_rect,
@@ -131,11 +126,14 @@ impl StrokeState {
             self.texture = Some(ctx.load_texture("brush_preview", image, TextureOptions::NEAREST));
         }
 
-        let handle = self.texture.as_mut().unwrap();
-        let dx = dirty.x;
-        let dy = dirty.y;
-        let dw = dirty.width.get();
-        let dh = dirty.height.get();
+        let handle = self
+            .texture
+            .as_mut()
+            .expect("Texture is created just above");
+        let dx = dirty.x.start;
+        let dy = dirty.y.start;
+        let dw = dirty.width().get();
+        let dh = dirty.height().get();
         let mask = &self.mask;
         let width = self.width;
         let pixels = (dy..dy + dh)
@@ -183,7 +181,7 @@ fn draw_brush_outline(
     painter.draw_dotted_rect(top_left, bottom_right);
 }
 
-const DEFAULT_BRUSH_SIZE: NonZeroU16 = NonZeroU16::new(10).unwrap();
+const DEFAULT_BRUSH_SIZE: NonZeroU16 = NonZeroU16::new(10).expect("10 is not zero");
 
 #[non_exhaustive]
 pub struct BrushTool {
@@ -262,12 +260,11 @@ impl Tool for BrushTool {
             });
         }
 
-        if ctx.response.dragged() {
-            if let Some(stroke) = &mut self.stroke {
-                if let Some((x, y)) = cursor_pos {
-                    stroke.stamp_to(x, y, half_size);
-                }
-            }
+        if ctx.response.dragged()
+            && let Some(stroke) = &mut self.stroke
+            && let Some((x, y)) = cursor_pos
+        {
+            stroke.stamp_to(x, y, half_size);
         }
 
         if let Some(stroke) = &mut self.stroke {
@@ -279,49 +276,31 @@ impl Tool for BrushTool {
             draw_brush_outline(ctx.painter, x, y, half_size, width, height);
         }
 
-        if ctx.response.drag_stopped() {
-            if !ctx.egui.input(|i| i.modifiers.command || i.modifiers.ctrl) {
-                if let Some(stroke) = self.stroke.take() {
-                    let spans = stroke.bounded_spans(image_width, image_height);
-                    match self.mode {
-                        Mode::Insert => {
-                            if let Ok(pixel_area) = SortedRanges::try_from_span_iter(spans) {
-                                ctx.image
-                                    .masks
-                                    .on_layer(self.layer)
-                                    .keep_overlapping(!matches!(
-                                        self.layer,
-                                        AffectedLayer::Unspecified
-                                    ))
-                                    .add(pixel_area);
-                            }
-                        }
-                        Mode::Clear => {
-                            ctx.image.masks.on_layer(self.layer).clear(spans);
-                        }
-                    }
+        let stroke = if ctx.response.drag_stopped()
+            && let Some(stroke) = self.stroke.take()
+        {
+            stroke
+        } else if ctx.response.clicked()
+            && let Some((x, y)) = cursor_pos
+        {
+            let mut stroke = StrokeState::new(width, height, x, y);
+            stroke.stamp_to(x, y, half_size);
+            stroke
+        } else {
+            return;
+        };
+        let spans = stroke.bounded_spans(image_width, image_height);
+        if let Ok(pixel_area) = SortedRanges::try_from_span_iter(spans) {
+            match self.mode {
+                Mode::Insert => {
+                    ctx.image
+                        .masks
+                        .on_layer(self.layer)
+                        .keep_overlapping(!matches!(self.layer, AffectedLayer::Unspecified))
+                        .add(pixel_area);
                 }
-            } else {
-                self.stroke = None;
-            }
-        } else if ctx.response.clicked() {
-            if let Some((x, y)) = cursor_pos {
-                let mut stroke = StrokeState::new(width, height, x, y);
-                stroke.stamp_to(x, y, half_size);
-                let spans = stroke.bounded_spans(image_width, image_height);
-                match self.mode {
-                    Mode::Insert => {
-                        if let Ok(pixel_area) = SortedRanges::try_from_span_iter(spans) {
-                            ctx.image
-                                .masks
-                                .on_layer(self.layer)
-                                .keep_overlapping(false)
-                                .add(pixel_area);
-                        }
-                    }
-                    Mode::Clear => {
-                        ctx.image.masks.on_layer(self.layer).clear(spans);
-                    }
+                Mode::Clear => {
+                    ctx.image.masks.on_layer(self.layer).clear(pixel_area);
                 }
             }
         }
@@ -464,9 +443,8 @@ mod tests {
         let mut s = new_state(10, 3);
         s.stamp_square(3, 1, 1);
         s.stamp_square(6, 0, 1);
-        let result = s.mask.iter().copied().collect::<Vec<_>>();
         #[rustfmt::skip]
-        assert_eq!(result, vec![
+        assert_eq!(s.mask, vec![
             false, false, true,  true,  true, true,  true,  true,  false, false,
             false, false, true,  true,  true, true,  true,  true,  false, false,
             false, false, true,  true,  true, false, false, false, false, false,

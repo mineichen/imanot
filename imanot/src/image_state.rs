@@ -9,7 +9,10 @@ use crate::{
     AsyncTask, History, HistoryStrategy, ImageData, ImageId, ImageLoadOk, MaskImage, Tools,
 };
 
-#[allow(clippy::large_enum_variant)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "Loaded holds image, mask and history state"
+)]
 pub enum ImageState {
     NotLoaded,
     LoadingImageData(AsyncTask<io::Result<ImageData>>),
@@ -79,10 +82,6 @@ impl ImageState {
 
 pub struct ImageStateLoaded {
     pub id: ImageId,
-    #[allow(
-        dead_code,
-        reason = "Acts as Strong reference for SizedTexture. SizedTexture would not render a image if TextureHandle is dropped"
-    )]
     pub texture: (TextureHandle, ImageSource<'static>),
     pub image: ImageLoadOk,
     pub masks: MaskImage,

@@ -51,6 +51,7 @@ impl Layer {
 
 #[derive(Default, Clone, PartialEq, Eq)]
 pub struct PixelAreaStack {
+    #[allow(clippy::rc_buffer, reason = "Needs Vec for clone-on-write mutation via Arc::make_mut")]
     areas: Arc<Vec<Layer>>,
 }
 
@@ -66,7 +67,7 @@ impl PixelAreaStack {
     pub fn get(&self, i: usize) -> Option<&PixelArea> {
         self.areas.get(i).and_then(Layer::as_filled)
     }
-    pub fn from_iter(areas: impl IntoIterator<Item = (usize, PixelArea)>) -> Self {
+    pub fn from_sparse_layers(areas: impl IntoIterator<Item = (usize, PixelArea)>) -> Self {
         let areas = areas.into_iter();
         let mut all: Vec<Layer> = Vec::with_capacity(areas.size_hint().0);
         for (i, area) in areas {
@@ -76,9 +77,7 @@ impl PixelAreaStack {
             }
             all[i] = Layer::Filled(area);
         }
-        Self {
-            areas: Arc::new(all),
-        }
+        Self { areas: Arc::new(all) }
     }
 
     pub fn max_layer(&self) -> usize {
@@ -218,10 +217,10 @@ mod tests {
     use imask::{SortedRanges, Span};
 
     use super::*;
-    const NON_ZERO_10: NonZeroU16 = NonZeroU16::new(10).unwrap();
+    const NON_ZERO_10: NonZeroU16 = NonZeroU16::new(10).expect("10 is not zero");
     #[test]
     fn allow_unordered() {
-        let stack = PixelAreaStack::from_iter([
+        let stack = PixelAreaStack::from_sparse_layers([
             (10, PixelArea::single_range_total_black(0, 0, NON_ZERO_10)),
             (1, PixelArea::single_range_total_black(0, 0, NON_ZERO_10)),
         ]);
@@ -230,11 +229,14 @@ mod tests {
     }
 
     #[test]
-    fn test_end_index() {
+    fn end_index() {
         let ranges = SortedRanges::from(Span::new(0..10, 0));
         let example = PixelArea::from_ranges(ranges, [0, 0, 0, 255]);
-        let x =
-            PixelAreaStack::from_iter([(1, example.clone()), (3, example.clone()), (5, example)]);
+        let x = PixelAreaStack::from_sparse_layers([
+            (1, example.clone()),
+            (3, example.clone()),
+            (5, example),
+        ]);
 
         let iter = x.iter().map(|(i, _)| i);
         assert_eq!(vec![1, 3, 5], iter.collect::<Vec<_>>());

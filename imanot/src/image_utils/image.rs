@@ -123,10 +123,7 @@ fn rgb8_to_buffer(
     let (width, height) = img.dimensions();
     let vec_u8: Vec<u8> = img.pixels().flat_map(|p| p.0).collect();
     // Convert Vec<u8> to Vec<[u8; 3]>
-    let vec: Vec<[u8; 3]> = vec_u8
-        .chunks_exact(3)
-        .map(|chunk| [chunk[0], chunk[1], chunk[2]])
-        .collect();
+    let vec: Vec<[u8; 3]> = vec_u8.as_chunks::<3>().0.to_vec();
     let width = NonZeroU32::new(width).ok_or_else(|| {
         std::io::Error::new(std::io::ErrorKind::InvalidData, "Invalid image width")
     })?;
@@ -141,10 +138,7 @@ fn image_to_rgb_buffer(img: &DynamicImage) -> std::io::Result<Image<[u8; 3], 1>>
     let (width, height) = rgba.dimensions();
     let vec_u8 = rgba.into_vec();
     // Convert Vec<u8> to Vec<[u8; 3]>
-    let vec: Vec<[u8; 3]> = vec_u8
-        .chunks_exact(3)
-        .map(|chunk| [chunk[0], chunk[1], chunk[2]])
-        .collect();
+    let vec: Vec<[u8; 3]> = vec_u8.as_chunks::<3>().0.to_vec();
     let width = NonZeroU32::new(width).ok_or_else(|| {
         std::io::Error::new(std::io::ErrorKind::InvalidData, "Invalid image width")
     })?;
@@ -180,11 +174,11 @@ where
                 num_traits::cast::NumCast::from(
                     ((as_f - lower) * range).clamp(0.0, max_pixel_value),
                 )
-                .unwrap()
+                .expect("Clamped f32 value fits in the pixel type")
             })
             .collect(),
     )
-    .unwrap()
+    .expect("Buffer length matches image dimensions")
 }
 
 #[cfg(test)]
@@ -196,21 +190,24 @@ mod tests {
 
     type LumaImage<T> = Image<T, 1>;
 
+    use crate::TestResult;
     use crate::image_utils::OriginalImage;
 
     use super::*;
 
     #[test]
-    fn fix_image_contrast_all_pixels_same() {
-        let image = ImageImageBuffer::from_raw(5, 5, vec![255.into(); 25]).unwrap();
+    fn fix_image_contrast_all_pixels_same() -> TestResult {
+        let image = ImageImageBuffer::from_raw(5, 5, vec![255; 25])
+            .ok_or("Buffer length matches image dimensions")?;
         let fixed = fix_image_contrast::<u8>(&image);
         assert_eq!(fixed, image);
+        Ok(())
     }
 
     #[test]
-    fn original_image_luma8_to_dynamic_image() {
-        let width = NonZeroU32::new(10).unwrap();
-        let height = NonZeroU32::new(10).unwrap();
+    fn original_image_luma8_to_dynamic_image() -> TestResult {
+        let width = NonZeroU32::new(10).ok_or("10 is not zero")?;
+        let height = NonZeroU32::new(10).ok_or("10 is not zero")?;
         let pixels: Vec<u8> = (0..100).map(|i| (i % 256) as u8).collect();
         let luma_img = LumaImage::new_vec(pixels.clone(), width, height);
         let original = OriginalImage::Luma8(luma_img);
@@ -221,15 +218,16 @@ mod tests {
                 assert_eq!(img.dimensions(), (10, 10));
                 let converted_pixels: Vec<u8> = img.pixels().map(|&image::Luma([p])| p).collect();
                 assert_eq!(converted_pixels, pixels);
+                Ok(())
             }
-            _ => panic!("Expected ImageLuma8, got {:?}", dyn_img),
+            _ => Err(format!("Expected ImageLuma8, got {dyn_img:?}").into()),
         }
     }
 
     #[test]
-    fn original_image_luma16_to_dynamic_image() {
-        let width = NonZeroU32::new(10).unwrap();
-        let height = NonZeroU32::new(10).unwrap();
+    fn original_image_luma16_to_dynamic_image() -> TestResult {
+        let width = NonZeroU32::new(10).ok_or("10 is not zero")?;
+        let height = NonZeroU32::new(10).ok_or("10 is not zero")?;
         // Create 16-bit pixels with values that should convert correctly
         let pixels: Vec<u16> = (0..100).map(|i| (i * 257) as u16).collect(); // Use values that span the range
         let luma_img = LumaImage::new_vec(pixels.clone(), width, height);
@@ -242,15 +240,16 @@ mod tests {
                 let converted_pixels: Vec<u16> = img.pixels().map(|&image::Luma([p])| p).collect();
                 // Verify that pixels are preserved exactly
                 assert_eq!(converted_pixels, pixels);
+                Ok(())
             }
-            _ => panic!("Expected ImageLuma16, got {:?}", dyn_img),
+            _ => Err(format!("Expected ImageLuma16, got {dyn_img:?}").into()),
         }
     }
 
     #[test]
-    fn original_image_rgb8_to_dynamic_image() {
-        let width = NonZeroU32::new(10).unwrap();
-        let height = NonZeroU32::new(10).unwrap();
+    fn original_image_rgb8_to_dynamic_image() -> TestResult {
+        let width = NonZeroU32::new(10).ok_or("10 is not zero")?;
+        let height = NonZeroU32::new(10).ok_or("10 is not zero")?;
         let pixels: Vec<[u8; 3]> = (0..100)
             .map(|i| [(i * 3) as u8, (i * 3 + 1) as u8, (i * 3 + 2) as u8])
             .collect();
@@ -263,15 +262,16 @@ mod tests {
                 assert_eq!(img.dimensions(), (10, 10));
                 let converted_pixels: Vec<[u8; 3]> = img.pixels().map(|&image::Rgb(x)| x).collect();
                 assert_eq!(converted_pixels, pixels);
+                Ok(())
             }
-            _ => panic!("Expected ImageRgb8, got {:?}", dyn_img),
+            _ => Err(format!("Expected ImageRgb8, got {dyn_img:?}").into()),
         }
     }
 
     #[test]
-    fn original_image_rgba8_to_dynamic_image() {
-        let width = NonZeroU32::new(10).unwrap();
-        let height = NonZeroU32::new(10).unwrap();
+    fn original_image_rgba8_to_dynamic_image() -> TestResult {
+        let width = NonZeroU32::new(10).ok_or("10 is not zero")?;
+        let height = NonZeroU32::new(10).ok_or("10 is not zero")?;
         let pixels: Vec<[u8; 4]> = (0..100)
             .map(|i| {
                 [
@@ -292,16 +292,17 @@ mod tests {
                 let converted_pixels: Vec<[u8; 4]> =
                     img.pixels().map(|&image::Rgba(x)| x).collect();
                 assert_eq!(converted_pixels, pixels);
+                Ok(())
             }
-            _ => panic!("Expected ImageRgba8, got {:?}", dyn_img),
+            _ => Err(format!("Expected ImageRgba8, got {dyn_img:?}").into()),
         }
     }
 
     #[test]
-    fn original_image_luma16_conversion_preserves_range() {
+    fn original_image_luma16_conversion_preserves_range() -> TestResult {
         // Test that Luma16 conversion handles the full 16-bit range correctly
-        let width = NonZeroU32::new(5).unwrap();
-        let height = NonZeroU32::new(1).unwrap();
+        let width = NonZeroU32::new(5).ok_or("5 is not zero")?;
+        let height = NonZeroU32::new(1).ok_or("1 is not zero")?;
         // Test various 16-bit values
         let pixels: Vec<u16> = vec![0, 128, 256, 512, 65535];
         let luma_img = LumaImage::new_vec(pixels.clone(), width, height);
@@ -318,8 +319,9 @@ mod tests {
                 assert_eq!(converted[2], 256);
                 assert_eq!(converted[3], 512);
                 assert_eq!(converted[4], 65535);
+                Ok(())
             }
-            _ => panic!("Expected ImageLuma16, got {:?}", dyn_img),
+            _ => Err(format!("Expected ImageLuma16, got {dyn_img:?}").into()),
         }
     }
 }

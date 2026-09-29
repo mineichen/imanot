@@ -100,13 +100,8 @@ pub(super) fn ui(
                 if let Some(brush) = any.downcast_mut::<BrushTool>() {
                     ui.horizontal(|ui| {
                         ui.label("Brush Size:");
-                        let mut raw = brush.brush_size.get();
-                        if ui
-                            .add(egui::Slider::new(&mut raw, 1..=100).step_by(1.0))
-                            .changed()
-                        {
-                            brush.brush_size = NonZeroU16::new(raw).unwrap();
-                        }
+                        const NZ100: NonZeroU16 = NonZeroU16::new(100).unwrap();
+                        ui.add(egui::Slider::new(&mut brush.brush_size, NonZeroU16::MIN..=NZ100).step_by(1.0));
                     });
                 }
             }

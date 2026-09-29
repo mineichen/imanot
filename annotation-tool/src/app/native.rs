@@ -11,7 +11,7 @@ pub fn run_native(mappers: ImageCallbackMap) -> Result<(), eframe::Error> {
     let config = match std::fs::File::open("config.json") {
         Ok(f) => serde_json::from_reader(f).map_err(|e| eframe::Error::AppCreation(Box::new(e)))?,
         Err(e) if e.kind() == io::ErrorKind::NotFound => crate::config::Config::default(),
-        Err(e) => Err(eframe::Error::AppCreation(Box::new(e)))?,
+        Err(e) => return Err(eframe::Error::AppCreation(Box::new(e))),
     };
 
     let options = eframe::NativeOptions {
