@@ -94,28 +94,25 @@ impl DragToolSettings {
             // another tool's commit) no longer matches the mask, so it is dropped
             // together with its gesture — before Delete could clear pixels from
             // the outdated snapshot. Delete removes a live selection.
-            selection = if sel.is_stale(ctx.image.masks.last_history_action()) {
-                None
-            } else if delete {
-                sel.delete_all(&mut ctx.image.masks);
-                None
-            } else {
-                Some(sel)
+            if !sel.is_stale(ctx.image.masks.last_history_action()) {
+                if delete {
+                    sel.delete_all(&mut ctx.image.masks);
+                } else {
+                    selection = Some(sel);
+                }
             }
         };
         // Escape cancels a running gesture, or drops the idle selection. A
         // cancelled transform reverts to the pre-gesture frame and matrix;
         // the mask was never touched, so there is nothing to undo there.
         // Other gestures just end.
-        if ctx.egui.input(|i| i.key_pressed(egui::Key::Escape)) {
-            (selection, gesture) = match (selection, gesture) {
-                (Some(mut sel), Some(Gesture::Transform(t))) => {
-                    sel.cancel_gesture(t);
-                    (Some(sel), None)
-                }
-                (selection, Some(_)) => (selection, None),
-                (_, None) => (None, None),
-            };
+        if ctx.egui.input(|i| i.key_pressed(egui::Key::Escape))
+            && let (Some(gesture), Some(mut sel)) = (gesture.take(), selection.take())
+        {
+            if let Gesture::Transform(t) = gesture {
+                sel.cancel_gesture(t);
+            }
+            selection = Some(sel);
         }
 
         let img_roi = {
@@ -296,7 +293,6 @@ fn step_transform(
     pointer: Option<Point2<f64>>,
     img_roi: Roi<u32>,
 ) -> (Option<ActiveSelection>, Option<Gesture>) {
-    *ctx.postpone_new_images = true;
     let Some(mut sel) = selection else {
         return (None, None);
     };
