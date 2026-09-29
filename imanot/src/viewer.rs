@@ -5,9 +5,16 @@ use egui::{
 
 use crate::ImagePainter;
 
+/// Largest fraction of the viewport's smaller side a single image pixel may
+/// cover on screen. Defines the deepest possible zoom-in.
+const MAX_PIXEL_VIEWPORT_FRACTION: f32 = 1.0 / 20.0;
+
 pub struct ImageViewer {
-    // Zoom level (0.05..1.0)
+    // Raw zoom level, may hold values outside the valid range
+    // (min_zoom..1.0). It is clamped whenever it is applied, see `zoom()`.
     // 1.0 means, that image width or height fits the viewport and the other dimension is smaller than the viewport
+    // The minimum depends on the image resolution: one image pixel can grow
+    // to at most `MAX_PIXEL_VIEWPORT_FRACTION` of the viewport's smaller side.
     zoom: f32,
     // Normalized image coordinate of the viewport center per axis in [0, 1]:
     // 0.0 = left/top image edge is at the viewport center
@@ -22,16 +29,27 @@ impl ImageViewer {
         self.pan_offset = Vec2::splat(0.5);
     }
 
+    /// Zoom level clamped to the valid range `min_zoom..1.0`.
+    /// The stored value may be out of range; it is clamped only here,
+    /// when it is applied.
     pub fn zoom(&self) -> f32 {
         self.zoom
     }
 
     pub fn set_zoom(&mut self, zoom: f32) {
-        self.zoom = zoom.clamp(0.05, 1.0);
+        self.zoom = zoom.clamp(0., 1.);
     }
 
     pub fn modify_zoom(&mut self, zoom: impl Fn(f32) -> f32) {
-        self.zoom = zoom(self.zoom).clamp(0.05, 1.0);
+        self.zoom = zoom(self.zoom.clamp(0., 1.));
+    }
+
+    /// Deepest allowed zoom-in for the given image and viewport sizes.
+    /// `render_scale = fit_scale / zoom` must not exceed
+    /// `min(viewport) * MAX_PIXEL_VIEWPORT_FRACTION`, i.e. a single image
+    /// pixel covers at most that fraction of the viewport's smaller side.
+    fn compute_min_zoom(fit_scale: f32, viewport_size: Vec2) -> f32 {
+        (fit_scale / (viewport_size.min_elem() * MAX_PIXEL_VIEWPORT_FRACTION)).min(1.0)
     }
 
     pub fn pan_offset(&self) -> Vec2 {
@@ -117,6 +135,12 @@ impl ImageViewer {
         let viewport_size = viewport_rect.size();
         let fit_scale =
             (viewport_size.x / original_image_size.x).min(viewport_size.y / original_image_size.y);
+
+        // The deepest zoom-in depends on the image resolution: zooming in
+        // further would make a single image pixel larger than
+        // `MAX_PIXEL_VIEWPORT_FRACTION` of the viewport's smaller side.
+        let min_zoom = Self::compute_min_zoom(fit_scale, viewport_size);
+        self.zoom = self.zoom().clamp(min_zoom, 1.);
 
         let cursor_image_pos = {
             let render_scale = fit_scale / self.zoom;
@@ -204,4 +228,48 @@ pub struct ImageViewerInteraction {
     pub cursor_image_pos: Option<(usize, usize)>,
     /// Allows painting stuff on the image with image coordinates
     pub image_painter: ImagePainter,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn min_zoom_caps_pixel_size_at_viewport_fraction() {
+        // 4K image fitting a 4K viewport: fit_scale = 1, max render_scale = 2160/20
+        let min_zoom = ImageViewer::compute_min_zoom(1.0, Vec2::new(3840.0, 2160.0));
+        assert!((min_zoom - 20.0 / 2160.0).abs() < 1e-6);
+        assert!(1.0 / min_zoom <= 2160.0 / 20.0 + 1e-6);
+
+        // 400x400 image in a 1000x800 viewport: fit_scale = 2, max render_scale = 40
+        let min_zoom = ImageViewer::compute_min_zoom(2.0, Vec2::new(1000.0, 800.0));
+        assert!((min_zoom - 0.05).abs() < 1e-6);
+    }
+
+    #[test]
+    fn min_zoom_never_exceeds_fit() {
+        // Image smaller than viewport/20: even at fit a pixel exceeds the
+        // fraction, so the limit saturates at 1.0 (no zooming in past fit).
+        let min_zoom = ImageViewer::compute_min_zoom(100.0, Vec2::new(1000.0, 1000.0));
+        assert_eq!(min_zoom, 1.0);
+    }
+
+    #[test]
+    fn zoom_is_stored_raw_and_clamped_on_render() {
+        let mut viewer = ImageViewer {
+            ..Default::default()
+        };
+
+        viewer.set_zoom(42.0);
+        assert_eq!(viewer.zoom, 1.0);
+        assert_eq!(viewer.zoom(), 1.0);
+
+        viewer.set_zoom(0.1);
+        assert_eq!(viewer.zoom, 0.1);
+        assert_eq!(viewer.zoom(), 0.1);
+
+        viewer.modify_zoom(|z| z * 10.0);
+        assert_eq!(viewer.zoom, 1.0);
+        assert_eq!(viewer.zoom(), 1.0);
+    }
 }
