@@ -75,7 +75,7 @@ impl ActiveSelection {
     }
 
     /// See [`ActiveSelectionLogic::snapshot_transform`].
-    pub(crate) fn snapshot_transform(&self) -> (Frame, Matrix3<f64>) {
+    pub(crate) fn snapshot_transform(&self) -> (Frame, Matrix3<f32>) {
         self.logic.snapshot_transform()
     }
 
@@ -84,7 +84,7 @@ impl ActiveSelection {
     pub(super) fn apply_gesture(
         &mut self,
         gesture: &TransformGesture,
-        pointer: Point2<f64>,
+        pointer: Point2<f32>,
         shift: bool,
     ) {
         let (frame, total) = gesture.apply(pointer, shift);

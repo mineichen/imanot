@@ -19,20 +19,20 @@ pub(super) enum Gesture {
 pub(super) struct TransformGesture {
     kind: TransformKind,
     base: Frame,
-    base_total: Matrix3<f64>,
+    base_total: Matrix3<f32>,
 }
 
 enum TransformKind {
     Move {
-        start: Point2<f64>,
+        start: Point2<f32>,
     },
     Resize {
         anchor: Anchor,
-        start: Point2<f64>,
+        start: Point2<f32>,
     },
     /// Pointer angle at press.
     Rotate {
-        start_angle: f64,
+        start_angle: f32,
     },
 }
 
@@ -41,8 +41,8 @@ impl TransformGesture {
     /// position; `None` when the press affords no gesture.
     pub(super) fn begin(
         part: HoverGesture,
-        start: Point2<f64>,
-        (base, base_total): (Frame, Matrix3<f64>),
+        start: Point2<f32>,
+        (base, base_total): (Frame, Matrix3<f32>),
     ) -> Option<Self> {
         let kind = match part {
             HoverGesture::None => return None,
@@ -64,7 +64,7 @@ impl TransformGesture {
     /// parameters, so overlay and rasterization can never drift apart.
     /// `shift` gives exact unsnapped rotation angles, or a corner resize
     /// free of the aspect-ratio lock.
-    pub(super) fn apply(&self, pointer: Point2<f64>, shift: bool) -> (Frame, Matrix3<f64>) {
+    pub(super) fn apply(&self, pointer: Point2<f32>, shift: bool) -> (Frame, Matrix3<f32>) {
         match self.kind {
             TransformKind::Move { start } => self.apply_move(start, pointer),
             TransformKind::Resize { anchor, start } => {
@@ -75,7 +75,7 @@ impl TransformGesture {
     }
 
     /// Frame and matrix to restore if the gesture is cancelled.
-    pub(super) fn base_state(&self) -> (Frame, Matrix3<f64>) {
+    pub(super) fn base_state(&self) -> (Frame, Matrix3<f32>) {
         (self.base, self.base_total)
     }
 
@@ -99,7 +99,7 @@ impl TransformGesture {
     /// enter `committed` and the *next* commit's Clear would erase outsider
     /// pixels sharing the rows. Snapping the gesture-total delta (not
     /// per-frame increments) keeps frame and matrix in sync.
-    fn apply_move(&self, start: Point2<f64>, pointer: Point2<f64>) -> (Frame, Matrix3<f64>) {
+    fn apply_move(&self, start: Point2<f32>, pointer: Point2<f32>) -> (Frame, Matrix3<f32>) {
         let delta = pointer - start;
         let snapped = Vector2::new(delta.x.round(), delta.y.round());
         let frame = Frame {
@@ -116,10 +116,10 @@ impl TransformGesture {
     fn apply_resize(
         &self,
         anchor: Anchor,
-        start: Point2<f64>,
-        pointer: Point2<f64>,
+        start: Point2<f32>,
+        pointer: Point2<f32>,
         shift: bool,
-    ) -> (Frame, Matrix3<f64>) {
+    ) -> (Frame, Matrix3<f32>) {
         let base = self.base;
         let (u, v) = base.axes();
         let delta = pointer - start;
@@ -161,10 +161,10 @@ impl TransformGesture {
     /// angle snaps to whole degrees.
     fn apply_rotate(
         &self,
-        start_angle: f64,
-        pointer: Point2<f64>,
+        start_angle: f32,
+        pointer: Point2<f32>,
         shift: bool,
-    ) -> (Frame, Matrix3<f64>) {
+    ) -> (Frame, Matrix3<f32>) {
         let base = self.base;
         let delta = (pointer.y - base.center.y).atan2(pointer.x - base.center.x) - start_angle;
         let angle = base.angle + delta;
@@ -188,7 +188,7 @@ impl TransformGesture {
 /// signs keep it there even when the pointer crosses the pivot in one axis
 /// only, by mirroring just that axis. Shift frees the axes entirely.
 /// Single-axis (edge) anchors are unaffected.
-fn locked_halves(base_half: Vector2<f64>, s: Vector2<f64>, d: Vector2<f64>) -> Vector2<f64> {
+fn locked_halves(base_half: Vector2<f32>, s: Vector2<f32>, d: Vector2<f32>) -> Vector2<f32> {
     let s_u = (base_half.x + s.x * d.x / 2.0) / base_half.x;
     let s_v = (base_half.y + s.y * d.y / 2.0) / base_half.y;
     let mut mag = s_u.abs().max(s_v.abs());
@@ -223,11 +223,11 @@ mod tests {
         }
     }
 
-    fn pt(x: f64, y: f64) -> Point2<f64> {
+    fn pt(x: f32, y: f32) -> Point2<f32> {
         Point2::new(x, y)
     }
 
-    fn resize(anchor: Anchor, start: Point2<f64>, base: Frame) -> TestResult<TransformGesture> {
+    fn resize(anchor: Anchor, start: Point2<f32>, base: Frame) -> TestResult<TransformGesture> {
         let part = HoverGesture::Resize(anchor);
         TransformGesture::begin(part, start, (base, Matrix3::identity()))
             .ok_or("Test gesture starts inside the frame".into())

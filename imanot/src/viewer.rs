@@ -7,7 +7,7 @@ use crate::ImagePainter;
 
 /// Largest fraction of the viewport's smaller side a single image pixel may
 /// cover on screen. Defines the deepest possible zoom-in.
-const MAX_PIXEL_VIEWPORT_FRACTION: f32 = 1.0 / 10.0;
+const MAX_PIXEL_VIEWPORT_FRACTION: f32 = 1.0 / 20.0;
 
 pub struct ImageViewer {
     // Raw zoom level, may hold values outside the valid range

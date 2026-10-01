@@ -25,7 +25,7 @@ computed fresh from that original:
 committed_or_preview = AffineTransformHeap(snapshot.spans(), &total_matrix)
 ```
 
-The tool also stores one accumulated `total_matrix: Matrix3<f64>` and, per
+The tool also stores one accumulated `total_matrix: Matrix3<f32>` and, per
 layer, the `committed` ranges (what the last commit wrote). A new gesture only
 updates `total_matrix` (`total = delta * total`); the rasterization always runs
 on the pristine original, so a sequence like
@@ -40,7 +40,9 @@ No custom rasterizer. `imask` at our pinned rev (`e756fc3`) already exports
 `AffineTransformHeap::new(spans, &Matrix3<f64>)` (`nalgebra 0.35`, already in
 `Cargo.lock`): per-span transformed quads, fixed-point scanline fill,
 heap-merged sorted disjoint output spans, `ImageDimension` output,
-`Err(PipelineError::Empty)` when fully off-screen. Upstream tests prove exact
+`Err(PipelineError::Empty)` when fully off-screen. The tool stores geometry as
+`f32` (`Frame`, `Matrix3<f32>`, `Point2<f32>`, `Vector2<f32>`) and converts to
+`f64` (`matrix.map(|v| v as f64)`) at the `imask` boundary. Upstream tests prove exact
 90° rotations, gap-free arbitrary rotations (37°, 150°, 269°…), no-gap 2x
 scale, area within ~15% for rotations.
 

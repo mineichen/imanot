@@ -35,23 +35,23 @@ pub(crate) fn frame_corners_screen(painter: &ImagePainter, frame: &Frame) -> [Po
     ]
     .map(|local| {
         let p = frame.point(local);
-        painter.image_to_screen(Pos2::new(p.x as f32, p.y as f32))
+        painter.image_to_screen(Pos2::new(p.x, p.y))
     })
 }
 
 /// Rotate-handle position in image coordinates: outward from the frame's top
 /// edge midpoint by `ROTATE_HANDLE_GAP_PX` screen pixels, converted to image
 /// units via the render scale so the gap is zoom-independent.
-pub(crate) fn rotate_handle_image(painter: &ImagePainter, frame: &Frame) -> Point2<f64> {
+pub(crate) fn rotate_handle_image(painter: &ImagePainter, frame: &Frame) -> Point2<f32> {
     let top_mid = frame.point(Vector2::new(0.0, -frame.half.y));
-    let dir: Vector2<f64> = top_mid - frame.center;
+    let dir: Vector2<f32> = top_mid - frame.center;
     let len = dir.norm();
-    let out = if len > f64::EPSILON {
+    let out = if len > f32::EPSILON {
         dir / len
     } else {
         Vector2::new(0.0, -1.0)
     };
-    top_mid + out * (f64::from(ROTATE_HANDLE_GAP_PX) / f64::from(painter.render_scale()))
+    top_mid + out * (ROTATE_HANDLE_GAP_PX / painter.render_scale())
 }
 
 /// Hit-test the overlay and resolve the afforded gesture: anchors and the
@@ -68,15 +68,15 @@ pub(crate) fn hit_test(
     let frame = selection.frame();
     let painter = &*ctx.painter;
     let pointer = painter.screen_to_image(screen);
-    let p = Point2::new(f64::from(pointer.x), f64::from(pointer.y));
-    let scale = f64::from(painter.render_scale());
-    if (p - rotate_handle_image(painter, frame)).norm() <= f64::from(ANCHOR_SIZE_PX) / scale {
+    let p = Point2::new(pointer.x, pointer.y);
+    let scale = painter.render_scale();
+    if (p - rotate_handle_image(painter, frame)).norm() <= ANCHOR_SIZE_PX / scale {
         return HoverGesture::Rotate;
     }
     let (u, v) = frame.axes();
     let d = p - frame.center;
     let (lu, lv) = (d.dot(&u), d.dot(&v));
-    let hit = f64::from(ANCHOR_HIT_HALF_PX) / scale;
+    let hit = ANCHOR_HIT_HALF_PX / scale;
     for anchor in Anchor::ALL {
         let s = anchor.sides();
         if (lu - s.x * frame.half.x).abs() <= hit && (lv - s.y * frame.half.y).abs() <= hit {
@@ -137,7 +137,7 @@ pub(crate) fn draw_overlay(painter: &ImagePainter, frame: &Frame) {
     for anchor in Anchor::ALL {
         let s = anchor.sides();
         let p = frame.point(Vector2::new(s.x * half.x, s.y * half.y));
-        let c = painter.image_to_screen(Pos2::new(p.x as f32, p.y as f32));
+        let c = painter.image_to_screen(Pos2::new(p.x, p.y));
         let r = EguiRect::from_center_size(c, Vec2::splat(ANCHOR_SIZE_PX));
         egui_painter.rect_filled(r, 1.0, Color32::WHITE);
         egui_painter.rect_stroke(
@@ -149,11 +149,11 @@ pub(crate) fn draw_overlay(painter: &ImagePainter, frame: &Frame) {
     }
     let handle = {
         let p = rotate_handle_image(painter, frame);
-        painter.image_to_screen(Pos2::new(p.x as f32, p.y as f32))
+        painter.image_to_screen(Pos2::new(p.x, p.y))
     };
     let top_mid = {
         let p = frame.point(Vector2::new(0.0, -half.y));
-        painter.image_to_screen(Pos2::new(p.x as f32, p.y as f32))
+        painter.image_to_screen(Pos2::new(p.x, p.y))
     };
     egui_painter.line_segment([top_mid, handle], Stroke::new(1.5, Color32::WHITE));
     egui_painter.circle_filled(handle, ANCHOR_SIZE_PX / 2.0, Color32::WHITE);

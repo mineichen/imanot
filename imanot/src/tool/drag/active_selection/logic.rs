@@ -26,7 +26,7 @@ pub(crate) struct ActiveSelectionLogic {
     /// Accumulated gesture transform, applied uniformly to every layer's
     /// pristine `original`. Only ever extended by gesture deltas, reset to
     /// identity on rebase (see `rebase`).
-    total: Matrix3<f64>,
+    total: Matrix3<f32>,
     /// Current selection geometry for overlay, anchors, pivots and
     /// hit-testing. Advanced by the same gesture deltas as `total`, so the two
     /// can never drift apart. Never derived from bounds.
@@ -110,13 +110,13 @@ impl ActiveSelectionLogic {
     /// Atomic `frame ↔ total` update for gesture progress / cancel. The only
     /// way to move one without the other, so overlay and rasterization can
     /// never drift apart.
-    pub(crate) fn set_transform(&mut self, frame: Frame, total: Matrix3<f64>) {
+    pub(crate) fn set_transform(&mut self, frame: Frame, total: Matrix3<f32>) {
         self.frame = frame;
         self.total = total;
     }
 
     /// Paired snapshot for gesture `base` state.
-    pub(crate) fn snapshot_transform(&self) -> (Frame, Matrix3<f64>) {
+    pub(crate) fn snapshot_transform(&self) -> (Frame, Matrix3<f32>) {
         (self.frame, self.total)
     }
 
@@ -138,7 +138,7 @@ impl ActiveSelectionLogic {
         &self,
         img_roi: Roi<u32>,
     ) -> Result<impl Iterator<Item = Span<u32>> + ImageDimension, PipelineError> {
-        let matrix = self.total;
+        let matrix = self.total.map(|v| v as f64);
         UnionAll::new(
             self.layers
                 .values()

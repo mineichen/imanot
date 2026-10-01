@@ -128,7 +128,7 @@ impl DragToolSettings {
         (selection, gesture) = match gesture {
             Some(Gesture::Rect(rect)) => self.step_rect(rect, selection, &mut ctx),
             Some(Gesture::Transform(transform)) => {
-                let pointer = pointer.map(|p| Point2::new(p.x as f64, p.y as f64));
+                let pointer = pointer.map(|p| Point2::new(p.x, p.y));
                 step_transform(transform, selection, &mut ctx, pointer, img_roi)
             }
             None => self.step_idle(selection, &mut ctx, pointer, pointer_screen, img_roi),
@@ -218,7 +218,7 @@ impl DragToolSettings {
             .map(|cur| cur - ctx.response.total_drag_delta().unwrap_or(Vec2::ZERO))?;
         let pointer = ctx.painter.screen_to_image(press_screen);
         let r = selection.and_then(|s| {
-            let press = Point2::new(pointer.x as f64, pointer.y as f64);
+            let press = Point2::new(pointer.x, pointer.y);
             let part = active_selection::hit_test(ctx, press_screen, s);
             TransformGesture::begin(part, press, s.snapshot_transform())
         });
@@ -286,7 +286,7 @@ fn step_transform(
     transform: TransformGesture,
     selection: Option<ActiveSelection>,
     ctx: &mut ToolContext,
-    pointer: Option<Point2<f64>>,
+    pointer: Option<Point2<f32>>,
     img_roi: Roi<u32>,
 ) -> (Option<ActiveSelection>, Option<Gesture>) {
     let Some(mut sel) = selection else {
@@ -411,7 +411,7 @@ mod tests {
         }
     }
 
-    fn drag_move(tool: &mut DragTool, from: Point2<f64>, to: Point2<f64>) -> TestResult {
+    fn drag_move(tool: &mut DragTool, from: Point2<f32>, to: Point2<f32>) -> TestResult {
         drag(tool, HoverGesture::Move, from, to, false)
     }
 
@@ -420,8 +420,8 @@ mod tests {
     fn drag(
         tool: &mut DragTool,
         gesture: HoverGesture,
-        from: Point2<f64>,
-        to: Point2<f64>,
+        from: Point2<f32>,
+        to: Point2<f32>,
         shift: bool,
     ) -> TestResult {
         let sel = tool.selection.as_mut().ok_or("has a selection")?;

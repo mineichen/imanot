@@ -3,7 +3,7 @@ use nalgebra::{Matrix3, Point2, Rotation2, Translation2, Vector2};
 
 /// Rotation snaps to multiples of this (absolute angle, not delta), unless
 /// Shift is held for the exact value.
-pub(crate) const ROTATE_SNAP_DEG: f64 = 1.0;
+pub(crate) const ROTATE_SNAP_DEG: f32 = 1.0;
 
 /// Resize anchors of the bounding box.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -31,7 +31,7 @@ impl Anchor {
     ];
 
     /// Side signs in frame space as a vector, each component in `{-1, 0, 1}`.
-    pub(crate) fn sides(self) -> Vector2<f64> {
+    pub(crate) fn sides(self) -> Vector2<f32> {
         match self {
             Self::Nw => Vector2::new(-1.0, -1.0),
             Self::N => Vector2::new(0.0, -1.0),
@@ -64,19 +64,19 @@ impl Anchor {
 /// exact size and orientation instead of inflating through nested AABBs.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Frame {
-    pub(crate) center: Point2<f64>,
-    pub(crate) half: Vector2<f64>,
-    pub(crate) angle: f64,
+    pub(crate) center: Point2<f32>,
+    pub(crate) half: Vector2<f32>,
+    pub(crate) angle: f32,
 }
 
 impl Frame {
     /// Unrotated frame tightly around integer content `bounds`. Snapshots
     /// always carry tight bounds, so this is O(1) with no span iteration.
     pub(crate) fn around(bounds: Roi<u32>) -> Self {
-        let x0 = f64::from(bounds.x.start);
-        let y0 = f64::from(bounds.y.start);
-        let x1 = f64::from(bounds.x.end);
-        let y1 = f64::from(bounds.y.end);
+        let x0 = bounds.x.start as f32;
+        let y0 = bounds.y.start as f32;
+        let x1 = bounds.x.end as f32;
+        let y1 = bounds.y.end as f32;
         Self {
             center: Point2::new((x0 + x1) / 2.0, (y0 + y1) / 2.0),
             half: Vector2::new((x1 - x0) / 2.0, (y1 - y0) / 2.0),
@@ -85,18 +85,18 @@ impl Frame {
     }
 
     /// Rotation of the frame (identity at angle 0).
-    pub(crate) fn rotation(&self) -> Rotation2<f64> {
+    pub(crate) fn rotation(&self) -> Rotation2<f32> {
         Rotation2::new(self.angle)
     }
 
     /// Orthonormal frame axes (u right, v down at angle 0) in image coords.
-    pub(crate) fn axes(&self) -> (Vector2<f64>, Vector2<f64>) {
+    pub(crate) fn axes(&self) -> (Vector2<f32>, Vector2<f32>) {
         let (sin, cos) = self.angle.sin_cos();
         (Vector2::new(cos, sin), Vector2::new(-sin, cos))
     }
 
     /// Frame-space offset in image coordinates.
-    pub(crate) fn point(&self, local: Vector2<f64>) -> Point2<f64> {
+    pub(crate) fn point(&self, local: Vector2<f32>) -> Point2<f32> {
         self.center + self.rotation() * local
     }
 
@@ -104,8 +104,8 @@ impl Frame {
     /// using their tight extent.
     pub(crate) fn expand_to_cover(&mut self, bounds: Roi<u32>) {
         self.expand_to_include(
-            Point2::new(f64::from(bounds.x.start), f64::from(bounds.y.start)),
-            Point2::new(f64::from(bounds.x.end), f64::from(bounds.y.end)),
+            Point2::new(bounds.x.start as f32, bounds.y.start as f32),
+            Point2::new(bounds.x.end as f32, bounds.y.end as f32),
         );
     }
 
@@ -113,7 +113,7 @@ impl Frame {
     /// frame stays the minimal same-angle box containing both the old frame
     /// and the new box: the center shifts so opposite sides don't grow
     /// unnecessarily.
-    pub(crate) fn expand_to_include(&mut self, min: Point2<f64>, max: Point2<f64>) {
+    pub(crate) fn expand_to_include(&mut self, min: Point2<f32>, max: Point2<f32>) {
         let (u, v) = self.axes();
         // Signed halves (mirrored frames) cover the same `±half` extent.
         let ah = Vector2::new(self.half.x.abs(), self.half.y.abs());
@@ -127,7 +127,7 @@ impl Frame {
             max,
             Point2::new(min.x, max.y),
         ] {
-            let d: Vector2<f64> = corner - self.center;
+            let d = corner - self.center;
             let lu = d.dot(&u);
             let lv = d.dot(&v);
             min_u = min_u.min(lu);
@@ -141,7 +141,7 @@ impl Frame {
     }
 }
 
-pub(crate) fn rotate_about(center: Point2<f64>, angle: f64) -> Matrix3<f64> {
+pub(crate) fn rotate_about(center: Point2<f32>, angle: f32) -> Matrix3<f32> {
     Translation2::new(center.x, center.y).to_homogeneous()
         * Rotation2::new(angle).to_homogeneous()
         * Translation2::new(-center.x, -center.y).to_homogeneous()
@@ -149,10 +149,10 @@ pub(crate) fn rotate_about(center: Point2<f64>, angle: f64) -> Matrix3<f64> {
 
 /// Scale about a world-space pivot, along axes rotated by `angle`.
 pub(crate) fn scale_about_frame(
-    pivot: Point2<f64>,
-    angle: f64,
-    scale: Vector2<f64>,
-) -> Matrix3<f64> {
+    pivot: Point2<f32>,
+    angle: f32,
+    scale: Vector2<f32>,
+) -> Matrix3<f32> {
     Translation2::new(pivot.x, pivot.y).to_homogeneous()
         * Rotation2::new(angle).to_homogeneous()
         * Matrix3::new(scale.x, 0.0, 0.0, 0.0, scale.y, 0.0, 0.0, 0.0, 1.0)
@@ -163,7 +163,7 @@ pub(crate) fn scale_about_frame(
 /// Clamp a signed half-size to ≥1px magnitude, preserving a mirror flip.
 /// Dragging an anchor onto (or past) the opposite edge must never leave a
 /// degenerate zero frame behind.
-pub(crate) fn clamp_half(raw: f64) -> f64 {
+pub(crate) fn clamp_half(raw: f32) -> f32 {
     if raw >= 0.0 {
         raw.max(0.5)
     } else {
@@ -172,7 +172,7 @@ pub(crate) fn clamp_half(raw: f64) -> f64 {
 }
 
 /// Snap an absolute angle to `ROTATE_SNAP_DEG` increments.
-pub(crate) fn snap_angle(angle: f64) -> f64 {
+pub(crate) fn snap_angle(angle: f32) -> f32 {
     ((angle.to_degrees() / ROTATE_SNAP_DEG).round() * ROTATE_SNAP_DEG).to_radians()
 }
 
@@ -193,10 +193,10 @@ mod tests {
 
     #[test]
     fn snap_angle_rounds_to_degree_steps() {
-        assert_eq!(snap_angle(0.4f64.to_radians()), 0.0);
-        assert_eq!(snap_angle(0.6f64.to_radians()), 1.0f64.to_radians());
-        assert_eq!(snap_angle(1.0f64.to_radians()), 1.0f64.to_radians());
-        assert_eq!(snap_angle((-2.4f64).to_radians()), (-2.0f64).to_radians());
+        assert_eq!(snap_angle(0.4f32.to_radians()), 0.0);
+        assert_eq!(snap_angle(0.6f32.to_radians()), 1.0f32.to_radians());
+        assert_eq!(snap_angle(1.0f32.to_radians()), 1.0f32.to_radians());
+        assert_eq!(snap_angle((-2.4f32).to_radians()), (-2.0f32).to_radians());
     }
 
     #[test]
