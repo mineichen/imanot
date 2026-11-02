@@ -51,12 +51,16 @@ impl Tool for PanTool {
             (viewport_size.x / original_image_size.x).min(viewport_size.y / original_image_size.y);
 
         if let Some((hover, factor)) = zoom {
-            let cursor_img = ctx.painter.screen_to_image(hover);
+            // The normalized pan offset and continuous image coordinates
+            // share the origin: the image's top-left corner is (0, 0), so
+            // no shift between the two conventions is needed.
+            let cursor = ctx.painter.screen_to_image(hover);
+            let cursor_img = Vec2::new(cursor.x.to_num::<f32>(), cursor.y.to_num::<f32>());
             viewer.modify_zoom(|x| x / factor);
             let render_scale = fit_scale / viewer.zoom();
 
             // Keep the image point under the cursor fixed while zooming
-            let center = cursor_img.to_vec2() + (viewport_rect.center() - hover) / render_scale;
+            let center = cursor_img + (viewport_rect.center() - hover) / render_scale;
             viewer.set_pan_offset(center / original_image_size);
         }
 

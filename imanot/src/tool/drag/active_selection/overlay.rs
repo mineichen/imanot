@@ -3,7 +3,8 @@ use nalgebra::{Point2, Vector2};
 
 use super::super::frame::{Anchor, Frame};
 use super::ActiveSelection;
-use crate::{ImagePainter, ToolContext};
+use crate::geometry::scalar_from_f32;
+use crate::{ImagePainter, ImgPoint, ImgRect, ToolContext, U20F12, top_left_of_pixel};
 
 /// Size of resize anchors and the rotate handle in screen pixels.
 pub(crate) const ANCHOR_SIZE_PX: f32 = 9.0;
@@ -35,7 +36,7 @@ pub(crate) fn frame_corners_screen(painter: &ImagePainter, frame: &Frame) -> [Po
     ]
     .map(|local| {
         let p = frame.point(local);
-        painter.image_to_screen(Pos2::new(p.x, p.y))
+        painter.image_to_screen(ImgPoint::new(scalar_from_f32(p.x), scalar_from_f32(p.y)))
     })
 }
 
@@ -68,7 +69,7 @@ pub(crate) fn hit_test(
     let frame = selection.frame();
     let painter = &*ctx.painter;
     let pointer = painter.screen_to_image(screen);
-    let p = Point2::new(pointer.x, pointer.y);
+    let p = Point2::new(pointer.x.to_num::<f32>(), pointer.y.to_num::<f32>());
     let scale = painter.render_scale();
     if (p - rotate_handle_image(painter, frame)).norm() <= ANCHOR_SIZE_PX / scale {
         return HoverGesture::Rotate;
@@ -87,12 +88,22 @@ pub(crate) fn hit_test(
         return HoverGesture::None;
     }
     let (w, h) = ctx.image.image.adjust.dimensions();
-    let (wrange, hrange) = ((0.0)..w.get() as f32, (0.0)..h.get() as f32);
-    if !wrange.contains(&pointer.x) || !hrange.contains(&pointer.y) {
+    // Continuous image extent: from the image origin (0, 0) to the last
+    // pixel's bottom-right corner. `Rect::contains` is half-open on the
+    // max side, matching the pixel coverage convention.
+    let image = ImgRect::new(
+        top_left_of_pixel(0u32, 0u32),
+        euclid::Size2D::new(
+            U20F12::saturating_from_num(w.get()),
+            U20F12::saturating_from_num(h.get()),
+        ),
+    );
+    if !image.contains(pointer) {
         return HoverGesture::Move;
     }
     let covers = ctx.image.masks.hover_layer().is_some_and(|hovered| {
-        selection.covers_on_layer(hovered, pointer.x as u32, pointer.y as u32)
+        let (px, py) = ImagePainter::pixel_at(pointer, w, h);
+        selection.covers_on_layer(hovered, px, py)
     });
     if covers {
         HoverGesture::Move
@@ -137,7 +148,7 @@ pub(crate) fn draw_overlay(painter: &ImagePainter, frame: &Frame) {
     for anchor in Anchor::ALL {
         let s = anchor.sides();
         let p = frame.point(Vector2::new(s.x * half.x, s.y * half.y));
-        let c = painter.image_to_screen(Pos2::new(p.x, p.y));
+        let c = painter.image_to_screen(ImgPoint::new(scalar_from_f32(p.x), scalar_from_f32(p.y)));
         let r = EguiRect::from_center_size(c, Vec2::splat(ANCHOR_SIZE_PX));
         egui_painter.rect_filled(r, 1.0, Color32::WHITE);
         egui_painter.rect_stroke(
@@ -149,11 +160,11 @@ pub(crate) fn draw_overlay(painter: &ImagePainter, frame: &Frame) {
     }
     let handle = {
         let p = rotate_handle_image(painter, frame);
-        painter.image_to_screen(Pos2::new(p.x, p.y))
+        painter.image_to_screen(ImgPoint::new(scalar_from_f32(p.x), scalar_from_f32(p.y)))
     };
     let top_mid = {
         let p = frame.point(Vector2::new(0.0, -half.y));
-        painter.image_to_screen(Pos2::new(p.x, p.y))
+        painter.image_to_screen(ImgPoint::new(scalar_from_f32(p.x), scalar_from_f32(p.y)))
     };
     egui_painter.line_segment([top_mid, handle], Stroke::new(1.5, Color32::WHITE));
     egui_painter.circle_filled(handle, ANCHOR_SIZE_PX / 2.0, Color32::WHITE);

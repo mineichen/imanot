@@ -3,7 +3,7 @@ use std::sync::Arc;
 use egui::{Color32, ColorImage, Pos2, Rect as EguiRect, TextureHandle, TextureOptions, Vec2};
 use imask::{ImageDimension, Roi, Span};
 
-use crate::ImagePainter;
+use crate::{ImagePainter, top_left_of_pixel};
 
 /// Color of the live transform preview (same look as the brush preview).
 const PREVIEW_COLOR: Color32 = Color32::from_rgba_premultiplied(0, 0, 0, 128);
@@ -116,10 +116,15 @@ impl PreviewState {
         let Some(texture) = &self.texture else {
             return;
         };
-        let min = painter.image_to_screen(Pos2::new(self.origin[0] as f32, self.origin[1] as f32));
-        let max = painter.image_to_screen(Pos2::new(
-            (self.origin[0] as usize + self.size[0]) as f32,
-            (self.origin[1] as usize + self.size[1]) as f32,
+        // Pixel bounds in continuous coordinates: from the first pixel's
+        // top-left corner to the last pixel's bottom-right corner.
+        let min = painter.image_to_screen(top_left_of_pixel(
+            self.origin[0] as usize,
+            self.origin[1] as usize,
+        ));
+        let max = painter.image_to_screen(top_left_of_pixel(
+            self.origin[0] as usize + self.size[0],
+            self.origin[1] as usize + self.size[1],
         ));
         painter.painter().image(
             texture.id(),
@@ -176,7 +181,7 @@ fn fill_spans(pixels: &mut [Color32], spans: impl Iterator<Item = Span<u32>>, bo
     let mut cursor = 0;
     for span in spans {
         let y = span.y - bounds.y.start;
-        debug_assert!(y < h as _);
+        debug_assert!(y < h as u32);
         debug_assert!(span.x.start >= bounds.x.start && span.x.end <= bounds.x.start + w as u32);
         let start = y as usize * w + (span.x.start - bounds.x.start) as usize;
         let end = y as usize * w + (span.x.end - bounds.x.start) as usize;

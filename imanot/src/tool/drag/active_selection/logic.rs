@@ -7,7 +7,7 @@ use imask::{
 use nalgebra::Matrix3;
 
 use super::super::frame::Frame;
-use super::super::transform::transform_layer;
+use super::super::transform::{to_span_space, transform_layer};
 use crate::{
     AffectedLayer, HistoryAction, HistoryActionAdd, HistoryActionClear, HistoryActionKind,
     MaskImage,
@@ -138,7 +138,7 @@ impl ActiveSelectionLogic {
         &self,
         img_roi: Roi<u32>,
     ) -> Result<impl Iterator<Item = Span<u32>> + ImageDimension, PipelineError> {
-        let matrix = self.total.map(|v| v as f64);
+        let matrix = to_span_space(&self.total);
         UnionAll::new(
             self.layers
                 .values()

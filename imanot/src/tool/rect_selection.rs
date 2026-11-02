@@ -1,9 +1,8 @@
 use std::num::{NonZeroU32, NonZeroUsize, TryFromIntError};
 
-use egui::Pos2;
 use imask::Roi;
 
-use crate::ToolContext;
+use crate::{ImagePainter, ImgPoint, ToolContext};
 
 pub struct RectSelectionResult {
     min_x: usize,
@@ -57,7 +56,7 @@ impl RectSelectionResult {
 
 #[derive(Default)]
 pub struct RectSelection {
-    drag_start_image: Option<Pos2>,
+    drag_start_image: Option<ImgPoint>,
 }
 
 impl RectSelection {
@@ -82,14 +81,16 @@ impl RectSelection {
             if let (Some(start_image), Some((end_x, end_y))) =
                 (self.drag_start_image, ctx.cursor_image_pos())
             {
-                let start_x = start_image.x as usize;
-                let start_y = start_image.y as usize;
-                self.drag_start_image = None;
-
                 // The mask texture is sized from `adjust`, not `original`, so we
                 // must clip against the adjusted dimensions to avoid creating
                 // ranges that exceed the mask buffer.
                 let (image_width, image_height) = ctx.image.image.adjust.dimensions();
+                let (start_x, start_y) = {
+                    let (x, y) = ImagePainter::pixel_at(start_image, image_width, image_height);
+                    (x as usize, y as usize)
+                };
+                self.drag_start_image = None;
+
                 let min_x = start_x.min(end_x);
                 let min_y = start_y.min(end_y);
                 let max_x = start_x

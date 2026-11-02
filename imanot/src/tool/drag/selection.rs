@@ -1,16 +1,14 @@
 use std::iter::{FusedIterator, once};
 
-use egui::Pos2;
 use imask::{
     ImageDimension, ImaskSet, Roi, SortedRanges, SortedRangesTightSpanBuilder, Span, SpanCluster,
 };
 
 use crate::{
-    AffectedLayer, DragTool, HistoryAction, MaskImage, PixelArea,
+    AffectedLayer, DragTool, HistoryAction, ImagePainter, ImgPoint, MaskImage, PixelArea,
     tool::drag::{
         DragToolSettings, LayerSelection,
         active_selection::{ActiveSelection, ActiveSelectionLogic},
-        transform::clamp_pixel,
     },
 };
 
@@ -70,7 +68,7 @@ impl DragTool {
     pub fn select_at(
         &mut self,
         masks: &mut MaskImage,
-        pointer: Pos2,
+        pointer: ImgPoint,
         img_roi: Roi<u32>,
         additive: bool,
     ) {
@@ -104,13 +102,11 @@ impl DragToolSettings {
     pub(super) fn calc_select_at(
         &self,
         masks: &MaskImage,
-        pointer: Pos2,
+        pointer: ImgPoint,
         img_roi: Roi<u32>,
         additive: bool,
     ) -> SelectionUpdate {
-        let img_w = img_roi.width().get() as usize;
-        let img_h = img_roi.height().get() as usize;
-        let (x, y) = clamp_pixel(pointer, img_w, img_h);
+        let (x, y) = ImagePainter::pixel_at(pointer, img_roi.width(), img_roi.height());
         // Topmost layer at the pixel restricted to this tool's `AffectedLayer`:
         // a click is "empty space" when no *affected* layer covers it, even if
         // an unaffected layer has a pixel there — then a non-additive click

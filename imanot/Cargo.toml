@@ -9,6 +9,8 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 egui.workspace = true
+euclid.workspace = true
+fixed.workspace = true
 futures = "0.3"
 image-0_25 = { workspace = true, optional = true }
 imask.workspace = true

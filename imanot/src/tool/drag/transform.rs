@@ -1,25 +1,32 @@
-use egui::Pos2;
 use imask::{AffineTransformHeap, ImageDimension, ImaskSet, Roi, SortedRanges, Span};
-use nalgebra::Matrix3;
+use nalgebra::{Matrix3, Vector2};
+
+/// Re-base a frame-space matrix into imask's span-rasterizer space.
+///
+/// Our geometry (see [`ImageSpace`](crate::ImageSpace)) is corner-origin:
+/// pixel `(x, y)` covers `[x, x+1)²`, its center at `(x + 0.5, y + 0.5)`.
+/// imask's [`AffineTransformHeap`] instead evaluates matrices in
+/// center-on-integer coordinates: pixel `(x, y)` is `[x-0.5, x+0.5]²`.
+/// The two agree on translations (snapped to whole pixels) but differ by
+/// the half pixel everywhere else — a rotation or mirror applied un-rebased
+/// rasterizes ~1px off its pivot. Converting via
+/// `M_span = T(-0.5) · M · T(+0.5)` re-expresses the same physical mapping
+/// in imask's coordinates.
+pub(crate) fn to_span_space(matrix: &Matrix3<f32>) -> Matrix3<f64> {
+    let half = Vector2::new(0.5f64, 0.5);
+    Matrix3::new_translation(&-half) * matrix.map(|v| v as f64) * Matrix3::new_translation(&half)
+}
 
 /// Transform `original` by `matrix`, clipped to the image. `None` if nothing
-/// remains visible.
+/// remains visible. The matrix is in frame space (see [`to_span_space`]).
 pub(crate) fn transform_layer(
     original: impl IntoIterator<Item = Span<u32>, IntoIter: ImageDimension>,
     matrix: &Matrix3<f32>,
     img_roi: Roi<u32>,
 ) -> Option<SortedRanges<u32>> {
-    let matrix_f64 = matrix.map(|v| v as f64);
-    let heap = AffineTransformHeap::new(original.into_iter(), &matrix_f64).ok()?;
+    let heap = AffineTransformHeap::new(original.into_iter(), &to_span_space(matrix)).ok()?;
     let clipped = heap.clip(img_roi).ok()?;
     SortedRanges::try_from_span_iter_minbounds(clipped).ok()
-}
-
-/// Clamp an image-space pointer to a pixel inside the image.
-pub(crate) fn clamp_pixel(pointer: Pos2, img_w: usize, img_h: usize) -> (u32, u32) {
-    let x = pointer.x.round().clamp(0.0, img_w.saturating_sub(1) as f32) as u32;
-    let y = pointer.y.round().clamp(0.0, img_h.saturating_sub(1) as f32) as u32;
-    (x, y)
 }
 
 #[cfg(test)]
@@ -98,21 +105,23 @@ mod tests {
 
     #[test]
     fn rotate_ninety_degrees_swaps_dimensions() -> TestResult {
-        // The rasterized 90° rotation of a centered 10x20 rect is 20x10.
+        // The rasterized 90° rotation of a centered 10x20 rect is a 20x10
+        // rect, pixel-exact at the rotated extent [35..55] x [45..55].
         // Uses the production `rotate_about` helper, not a test-only matrix.
         let original = Roi::new(40..50, 40..60);
         let m = rotate_about(Point2::new(45.0, 50.0), std::f32::consts::FRAC_PI_2);
         let out =
             transform_layer(original.into_spans(), &m, IMG_ROI).ok_or("Rotation stays visible")?;
         let bounds = out.roi();
-        assert_eq!(bounds.width().get(), 20);
-        assert_eq!(bounds.height().get(), 10);
+        assert_eq!((bounds.x.start, bounds.x.end), (35, 55));
+        assert_eq!((bounds.y.start, bounds.y.end), (45, 55));
         Ok(())
     }
 
     #[test]
     fn mirror_transform_preserves_width_on_mirrored_side() -> TestResult {
-        // Horizontal mirror about the west edge (x=10) of a 5px rect.
+        // Horizontal mirror about the west edge (x=10) of a 5px rect: the
+        // content lands pixel-exact at 5..10, sharing the pivot edge.
         let original = Roi::new(10..15, 10..15);
         let m = scale_about_frame(Point2::new(10.0, 12.5), 0.0, Vector2::new(-1.0, 1.0));
         let out =
@@ -120,10 +129,8 @@ mod tests {
         let bounds = out.roi();
         assert_eq!(bounds.width().get(), 5);
         assert_eq!(bounds.height().get(), 5);
-        // Mirrored content sits west of the pivot (imask's half-open
-        // discretization lands it up to 1px overlapping, hence `<= 11`).
-        assert!(bounds.x.start < 10, "{bounds:?}");
-        assert!(bounds.x.end <= 11, "{bounds:?}");
+        assert_eq!((bounds.x.start, bounds.x.end), (5, 10));
+        assert_eq!((bounds.y.start, bounds.y.end), (10, 15));
         Ok(())
     }
 }

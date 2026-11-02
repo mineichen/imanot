@@ -10,6 +10,8 @@ edition = "2024"
 eframe = { version = "0.36", default-features = false }
 egui = { version = "0.36", default-features = false }
 emath = "0.36"
+euclid = "0.22"
+fixed = "1"
 futures-core = "0.3"
 image-0_25 = { package = "image", version = "0.25", default-features = false }
 imbuf = "0.3"

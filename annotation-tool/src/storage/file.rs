@@ -262,7 +262,7 @@ impl Storage for FileStorage {
 
                 let mut f = brotli::CompressorWriter::new(f, 4096, 11, 22);
                 for (_layer, sub) in masks.iter() {
-                    if sub.range_len() > u16::MAX as _ {
+                    if sub.range_len() > u16::MAX as usize {
                         return Err(std::io::Error::new(
                             ErrorKind::InvalidData,
                             format!(

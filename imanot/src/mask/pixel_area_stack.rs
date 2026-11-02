@@ -51,7 +51,10 @@ impl Layer {
 
 #[derive(Default, Clone, PartialEq, Eq)]
 pub struct PixelAreaStack {
-    #[allow(clippy::rc_buffer, reason = "Needs Vec for clone-on-write mutation via Arc::make_mut")]
+    #[allow(
+        clippy::rc_buffer,
+        reason = "Needs Vec for clone-on-write mutation via Arc::make_mut"
+    )]
     areas: Arc<Vec<Layer>>,
 }
 
@@ -77,7 +80,9 @@ impl PixelAreaStack {
             }
             all[i] = Layer::Filled(area);
         }
-        Self { areas: Arc::new(all) }
+        Self {
+            areas: Arc::new(all),
+        }
     }
 
     pub fn max_layer(&self) -> usize {

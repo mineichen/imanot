@@ -3,6 +3,7 @@ use std::{future::Future, pin::Pin, sync::Arc};
 
 mod async_task;
 mod cursor_image;
+mod geometry;
 mod image_state;
 mod image_utils;
 mod mask;
@@ -14,6 +15,7 @@ mod viewer;
 
 pub use async_task::*;
 pub use cursor_image::*;
+pub use geometry::*;
 pub use image_state::*;
 pub use image_utils::*;
 pub use imbuf::Image;

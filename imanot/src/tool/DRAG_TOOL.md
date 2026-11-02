@@ -42,7 +42,13 @@ No custom rasterizer. `imask` at our pinned rev (`e756fc3`) already exports
 heap-merged sorted disjoint output spans, `ImageDimension` output,
 `Err(PipelineError::Empty)` when fully off-screen. The tool stores geometry as
 `f32` (`Frame`, `Matrix3<f32>`, `Point2<f32>`, `Vector2<f32>`) and converts to
-`f64` (`matrix.map(|v| v as f64)`) at the `imask` boundary. Upstream tests prove exact
+`f64` at the `imask` boundary via `to_span_space`
+(`transform.rs`), which also re-bases the matrix between the coordinate
+conventions: `imanot`'s image space is corner-origin (pixel `(x, y)` covers
+`[x, x+1)²`, centers at `+0.5`, see `geometry.rs`), while `imask`'s
+rasterizer evaluates matrices center-on-integer (pixel `(x, y)` is
+`[x-0.5, x+0.5]²`) — `M_span = T(-0.5) · M · T(+0.5)` keeps rotations and
+mirrors pixel-exact on their pivots. Upstream tests prove exact
 90° rotations, gap-free arbitrary rotations (37°, 150°, 269°…), no-gap 2x
 scale, area within ~15% for rotations.
 

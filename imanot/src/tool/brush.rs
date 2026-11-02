@@ -10,7 +10,7 @@ use imask::{BitmapToSpanIter, Roi, SortedRanges, WithRoi};
 
 use crate::{
     AffectedLayer, DrawTool, ImagePainter, MaskActionBuilder, MaskDefaultActions, Mode, Tool,
-    ToolContext, ToolFactory,
+    ToolContext, ToolFactory, top_left_of_pixel,
 };
 
 struct StrokeState {
@@ -174,9 +174,10 @@ fn draw_brush_outline(
     let y_min = iy.saturating_sub(half_size);
     let y_max = (iy + half_size).min(height - 1);
 
-    let top_left = painter.image_to_screen(egui::Pos2::new(x_min as f32, y_min as f32));
-    let bottom_right =
-        painter.image_to_screen(egui::Pos2::new((x_max + 1) as f32, (y_max + 1) as f32));
+    // Pixel edges: the outline surrounds the covered pixel centers, from
+    // the first pixel's top-left corner to the last pixel's bottom-right.
+    let top_left = painter.image_to_screen(top_left_of_pixel(x_min, y_min));
+    let bottom_right = painter.image_to_screen(top_left_of_pixel(x_max + 1, y_max + 1));
 
     painter.draw_dotted_rect(top_left, bottom_right);
 }
@@ -268,13 +269,12 @@ impl Tool for BrushTool {
             .interact_pointer_pos()
             .or_else(|| ctx.response.hover_pos())
             .map(|screen_pos| {
-                let image_pos = ctx.painter.screen_to_image(screen_pos);
-                // A pixel spans [x, x+1) in image space, so the pixel under
-                // the cursor starts at its floor, not its nearest neighbor.
-                // Rounding would snap to the next pixel at the pixel center.
-                let x = image_pos.x.floor().clamp(0.0, (width - 1) as f32) as usize;
-                let y = image_pos.y.floor().clamp(0.0, (height - 1) as f32) as usize;
-                (x, y)
+                let (x, y) = ImagePainter::pixel_at(
+                    ctx.painter.screen_to_image(screen_pos),
+                    image_width,
+                    image_height,
+                );
+                (x as usize, y as usize)
             });
 
         if ctx.response.drag_started() {

@@ -11,8 +11,10 @@ pub use rect::*;
 pub use rect_selection::*;
 
 use std::any::Any;
+use std::num::NonZeroU32;
 
-use crate::{AffectedLayer, CursorImageSystem, ImageStateLoaded, ImageViewer};
+use crate::geometry::scalar_from_f32;
+use crate::{AffectedLayer, CursorImageSystem, ImageStateLoaded, ImageViewer, ImgPoint, U20F12};
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub enum Mode {
@@ -80,14 +82,34 @@ impl ImagePainter {
         self.render_scale
     }
 
-    /// Convert image coordinates to screen coordinates
-    pub fn image_to_screen(&self, image_pos: egui::Pos2) -> egui::Pos2 {
-        self.image_rect.min + (image_pos.to_vec2() * self.render_scale)
+    /// Convert image coordinates to screen coordinates.
+    ///
+    /// Image coordinates are [`ImgPoint`]s in the continuous convention
+    /// described at [`ImageSpace`](crate::ImageSpace). This is the only
+    /// place image coordinates become egui screen coordinates.
+    pub fn image_to_screen(&self, image_pos: ImgPoint) -> egui::Pos2 {
+        self.image_rect.min
+            + egui::Vec2::new(image_pos.x.to_num::<f32>(), image_pos.y.to_num::<f32>())
+                * self.render_scale
     }
 
-    /// Convert screen coordinates to image coordinates
-    pub fn screen_to_image(&self, screen_pos: egui::Pos2) -> egui::Pos2 {
-        ((screen_pos - self.image_rect.min) / self.render_scale).to_pos2()
+    /// Convert screen coordinates to continuous image coordinates
+    /// (an [`ImgPoint`]; see
+    /// [`top_left_from_index`](crate::top_left_from_index)).
+    pub fn screen_to_image(&self, screen_pos: egui::Pos2) -> ImgPoint {
+        let image_pos = (screen_pos - self.image_rect.min) / self.render_scale;
+        ImgPoint::new(scalar_from_f32(image_pos.x), scalar_from_f32(image_pos.y))
+    }
+
+    /// The pixel under a continuous image-space position: its `floor`,
+    /// clamped to the image bounds. Pixel `(x, y)` covers `[x, x+1)`, so
+    /// the floor is exact — see [`ImageSpace`](crate::ImageSpace).
+    pub fn pixel_at(pos: ImgPoint, width: NonZeroU32, height: NonZeroU32) -> (u32, u32) {
+        let max_x = U20F12::saturating_from_num(width.get() - 1);
+        let max_y = U20F12::saturating_from_num(height.get() - 1);
+        let x = pos.x.clamp(U20F12::ZERO, max_x).floor().to_num::<u32>();
+        let y = pos.y.clamp(U20F12::ZERO, max_y).floor().to_num::<u32>();
+        (x, y)
     }
 
     /// Draw a black-white dotted rectangle from corner to corner (screen coordinates)
@@ -171,7 +193,91 @@ impl<'a> ToolContext<'a> {
     pub fn cursor_image_pos(&self) -> Option<(usize, usize)> {
         self.response.interact_pointer_pos().map(|screen_pos| {
             let image_pos = self.painter.screen_to_image(screen_pos);
-            (image_pos.x as usize, image_pos.y as usize)
+            let (x, y) = ImagePainter::pixel_at(
+                image_pos,
+                self.image.image.original.width(),
+                self.image.image.original.height(),
+            );
+            (x as usize, y as usize)
         })
+    }
+
+    /// Get the cursor position in continuous image coordinates (see
+    /// [`top_left_from_index`](crate::top_left_from_index)):
+    /// subpixel-accurate, with pixel `(x, y)` covering `[x, x+1)` so its
+    /// center is at `(x + 0.5, y + 0.5)`. Not clamped to the image.
+    /// Returns None if the cursor is not over the widget.
+    pub fn cursor_image_posf(&self) -> Option<ImgPoint> {
+        self.response
+            .interact_pointer_pos()
+            .map(|screen_pos| self.painter.screen_to_image(screen_pos))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn pt(x: f32, y: f32) -> ImgPoint {
+        ImgPoint::new(U20F12::from_num(x), U20F12::from_num(y))
+    }
+
+    fn dims(n: u32) -> (NonZeroU32, NonZeroU32) {
+        (
+            NonZeroU32::new(n).expect("n > 0"),
+            NonZeroU32::new(n).expect("n > 0"),
+        )
+    }
+
+    #[test]
+    fn pixel_at_floors_to_the_pixel_under_the_cursor() {
+        let (w, h) = dims(10);
+        // Pixel 5 covers [5, 6): its left edge at 5.0 already belongs to it.
+        assert_eq!(ImagePainter::pixel_at(pt(5.4, 3.2), w, h), (5, 3));
+        assert_eq!(ImagePainter::pixel_at(pt(5.0, 3.0), w, h), (5, 3));
+        assert_eq!(ImagePainter::pixel_at(pt(6.0, 4.0), w, h), (6, 4));
+        // Sub-pixel positions stay inside the pixel of their floor.
+        assert_eq!(ImagePainter::pixel_at(pt(5.99, 0.99), w, h), (5, 0));
+    }
+
+    #[test]
+    fn pixel_at_clamps_to_image_bounds() {
+        let (w, h) = dims(10);
+        // The image's top-left corner is the origin (0, 0).
+        assert_eq!(ImagePainter::pixel_at(pt(0.0, 0.0), w, h), (0, 0));
+        assert_eq!(ImagePainter::pixel_at(pt(15.0, 9.49), w, h), (9, 9));
+        // Beyond the image: clamped to the last pixel.
+        assert_eq!(ImagePainter::pixel_at(pt(100.0, 200.0), w, h), (9, 9));
+    }
+
+    #[test]
+    fn image_screen_conversion_roundtrips() {
+        let ctx = egui::Context::default();
+        let rect =
+            egui::Rect::from_min_size(egui::Pos2::new(10.0, 20.0), egui::Vec2::new(300.0, 300.0));
+        let painter = ImagePainter::new(ctx.layer_painter(egui::LayerId::background()), rect, 2.0);
+        // All values exactly representable in `U20F12`.
+        let image_pos = pt(3.25, 1.75);
+        let screen_pos = painter.image_to_screen(image_pos);
+        let back = painter.screen_to_image(screen_pos);
+        assert_eq!(back, image_pos);
+    }
+
+    #[test]
+    fn image_to_screen_anchors_pixel_corners() {
+        let ctx = egui::Context::default();
+        let rect =
+            egui::Rect::from_min_size(egui::Pos2::new(10.0, 20.0), egui::Vec2::new(300.0, 300.0));
+        let painter = ImagePainter::new(ctx.layer_painter(egui::LayerId::background()), rect, 2.0);
+        // Pixel (0, 0)'s top-left corner is the image origin (0, 0): the
+        // image rect's min.
+        assert_eq!(
+            painter.image_to_screen(crate::top_left_of_pixel(0usize, 0usize)),
+            rect.min
+        );
+        // Pixel centers sit at +0.5: pixel (1, 1)'s center is at (1.5, 1.5),
+        // so it lands 1.5 · render_scale = 3 screen px from the rect's min.
+        let center = painter.image_to_screen(pt(1.5, 1.5));
+        assert_eq!(center, rect.min + egui::Vec2::splat(3.0));
     }
 }

@@ -1,6 +1,8 @@
 use imask::Roi;
 use nalgebra::{Matrix3, Point2, Rotation2, Translation2, Vector2};
 
+use crate::top_left_of_pixel;
+
 /// Rotation snaps to multiples of this (absolute angle, not delta), unless
 /// Shift is held for the exact value.
 pub(crate) const ROTATE_SNAP_DEG: f32 = 1.0;
@@ -70,13 +72,14 @@ pub(crate) struct Frame {
 }
 
 impl Frame {
-    /// Unrotated frame tightly around integer content `bounds`. Snapshots
-    /// always carry tight bounds, so this is O(1) with no span iteration.
+    /// Unrotated frame tightly around integer content `bounds`, in
+    /// continuous image coordinates (see [`from_index`]). Snapshots always
+    /// carry tight bounds, so this is O(1) with no span iteration.
     pub(crate) fn around(bounds: Roi<u32>) -> Self {
-        let x0 = bounds.x.start as f32;
-        let y0 = bounds.y.start as f32;
-        let x1 = bounds.x.end as f32;
-        let y1 = bounds.y.end as f32;
+        let min = top_left_of_pixel(bounds.x.start, bounds.y.start);
+        let max = top_left_of_pixel(bounds.x.end, bounds.y.end);
+        let (x0, y0) = (min.x.to_num::<f32>(), min.y.to_num::<f32>());
+        let (x1, y1) = (max.x.to_num::<f32>(), max.y.to_num::<f32>());
         Self {
             center: Point2::new((x0 + x1) / 2.0, (y0 + y1) / 2.0),
             half: Vector2::new((x1 - x0) / 2.0, (y1 - y0) / 2.0),
@@ -101,11 +104,13 @@ impl Frame {
     }
 
     /// Grow the frame (keeping angle) to cover integer content `bounds`,
-    /// using their tight extent.
+    /// using their tight extent (see [`Frame::around`]).
     pub(crate) fn expand_to_cover(&mut self, bounds: Roi<u32>) {
+        let min = top_left_of_pixel(bounds.x.start, bounds.y.start);
+        let max = top_left_of_pixel(bounds.x.end, bounds.y.end);
         self.expand_to_include(
-            Point2::new(bounds.x.start as f32, bounds.y.start as f32),
-            Point2::new(bounds.x.end as f32, bounds.y.end as f32),
+            Point2::new(min.x.to_num::<f32>(), min.y.to_num::<f32>()),
+            Point2::new(max.x.to_num::<f32>(), max.y.to_num::<f32>()),
         );
     }
 

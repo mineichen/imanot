@@ -64,24 +64,42 @@
           trunk --version
         '';
 
+        # Mirrors rust-analyzer-lsp@claude-plugins-official, which only declares the server.
+        # Built into the image, because /root/.claude isn't persisted between runs.
+        rustAnalyzerLspPlugin = pkgs.writeTextDir "rust-analyzer-lsp/.claude-plugin/plugin.json"
+          (builtins.toJSON {
+            name = "rust-analyzer-lsp";
+            description = "Rust language server for code intelligence and analysis";
+            version = "1.0.0";
+            lspServers.rust-analyzer = {
+              command = "${rust}/bin/rust-analyzer";
+              extensionToLanguage.".rs" = "rust";
+            };
+          });
+        claudeCodeWithLsp = pkgs.writeShellScriptBin "claude" ''
+          exec ${pkgs.claude-code}/bin/claude --plugin-dir ${rustAnalyzerLspPlugin}/rust-analyzer-lsp "$@"
+        '';
+
         policy = pkgs.writeText "policy.json"
           ''{"default":[{"type":"insecureAcceptAnything"}]}'';
 
         containername = "imanot-isolated-dev";
 
-        # Make slirp4netns available to the host-side Podman process.
+        # Make passt (pasta) available to the host-side Podman process.
         podmanRuntimePath = pkgs.lib.makeBinPath [
-          pkgs.slirp4netns
+          pkgs.passt
         ];
 
-        podmanRun = "${pkgs.podman}/bin/podman run --rm -it "
-          + "--network=slirp4netns "
-          + "--tmpfs /tmp "
-          + "-v ../imanot:/workspace/imanot:z "
-          + "-v ../imask:/workspace/imask:z "
-          + "-v ../imbuf:/workspace/imbuf:z "
-          + "-e HOME=/root "
-          + "${containername}:latest /bin/entrypoint.sh";
+        podmanRun = ''
+          workspace="$(realpath "''${1:-.}")"
+          exec ${pkgs.podman}/bin/podman run --rm -it \
+            --network=pasta \
+            --tmpfs /tmp \
+            -v "$workspace:/workspace:z" \
+            -w "/workspace/$(basename "$workspace")" \
+            -e HOME=/root \
+            ${containername}:latest /bin/entrypoint.sh
+        '';
 
       in
       {
@@ -104,9 +122,9 @@
             paths = commonBuildInputs ++ [
               pkgs.bashInteractive
               pkgs.ripgrep
-              pkgs.slirp4netns
+              pkgs.passt
               pkgs.git
-              pkgs.claude-code
+              claudeCodeWithLsp
               pkgs.opencode
               pkgs.busybox
 
