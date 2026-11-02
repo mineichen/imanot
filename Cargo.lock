@@ -876,6 +876,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b97b65636e5b9ef369943878ac74335ba1c55c1cb6adbf1e2c293c624248d693"
 
 [[package]]
+name = "fearless_simd"
+version = "1.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "629c9d6b6f30b5604089e0980f4d924a013aacb1654a6cdf5d3d852224f68651"
+
+[[package]]
 name = "find-msvc-tools"
 version = "0.1.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1308,10 +1314,10 @@ dependencies = [
 
 [[package]]
 name = "imbuf"
-version = "0.3.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1397940bf3714b51e0075b12b1cfd1974fd85e9432d2d5f9fcc1709e4619e920"
+version = "0.4.0"
 dependencies = [
+ "bytemuck",
+ "fearless_simd 1.2.0",
  "thiserror 2.0.21",
 ]
 
@@ -3057,7 +3063,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b2e9aed918117e8152c9eddfd8362d73c465c23f26c44786aa331707b8a64fa2"
 dependencies = [
  "bytemuck",
- "fearless_simd",
+ "fearless_simd 0.4.1",
  "guillotiere",
  "log",
  "peniko",

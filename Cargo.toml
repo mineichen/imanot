@@ -14,7 +14,7 @@ euclid = "0.22"
 fixed = "1"
 futures-core = "0.3"
 image-0_25 = { package = "image", version = "0.25", default-features = false }
-imbuf = "0.3"
+imbuf = "0.4"
 imask = { git = "https://github.com/mineichen/imask.git" }
 itertools = "0.15"
 log = "0.4"
@@ -23,6 +23,9 @@ serde = { version = "1" }
 
 # [patch."https://github.com/mineichen/imask.git"]
 # imask = { path = "../imask" }
+
+[patch.crates-io]
+imbuf = { path = "../imbuf/imbuf" }
 
 
 [workspace.lints.clippy]

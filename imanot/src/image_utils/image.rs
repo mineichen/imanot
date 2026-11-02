@@ -102,7 +102,11 @@ fn luma8_to_buffer(img: &ImageImageBuffer<Luma<u8>, Vec<u8>>) -> std::io::Result
     let height = NonZeroU32::new(height).ok_or_else(|| {
         std::io::Error::new(std::io::ErrorKind::InvalidData, "Invalid image height")
     })?;
-    Ok(Image::new_vec(pixels, width, height))
+    Image::new_vec(pixels, width, height).map_err(invalid_data)
+}
+
+fn invalid_data(e: imbuf::InvalidLenError) -> std::io::Error {
+    std::io::Error::new(std::io::ErrorKind::InvalidData, e)
 }
 
 fn luma16_to_buffer(img: &ImageImageBuffer<Luma<u16>, Vec<u16>>) -> std::io::Result<Image<u16, 1>> {
@@ -114,7 +118,7 @@ fn luma16_to_buffer(img: &ImageImageBuffer<Luma<u16>, Vec<u16>>) -> std::io::Res
     let height = NonZeroU32::new(height).ok_or_else(|| {
         std::io::Error::new(std::io::ErrorKind::InvalidData, "Invalid image height")
     })?;
-    Ok(Image::new_vec(pixels, width, height))
+    Image::new_vec(pixels, width, height).map_err(invalid_data)
 }
 
 fn rgb8_to_buffer(
@@ -130,7 +134,7 @@ fn rgb8_to_buffer(
     let height = NonZeroU32::new(height).ok_or_else(|| {
         std::io::Error::new(std::io::ErrorKind::InvalidData, "Invalid image height")
     })?;
-    Ok(Image::new_vec(vec, width, height))
+    Image::new_vec(vec, width, height).map_err(invalid_data)
 }
 
 fn image_to_rgb_buffer(img: &DynamicImage) -> std::io::Result<Image<[u8; 3], 1>> {
@@ -145,7 +149,7 @@ fn image_to_rgb_buffer(img: &DynamicImage) -> std::io::Result<Image<[u8; 3], 1>>
     let height = NonZeroU32::new(height).ok_or_else(|| {
         std::io::Error::new(std::io::ErrorKind::InvalidData, "Invalid image height")
     })?;
-    Ok(Image::new_vec(vec, width, height))
+    Image::new_vec(vec, width, height).map_err(invalid_data)
 }
 
 fn fix_image_contrast<T: image::Primitive + Ord>(
@@ -209,7 +213,7 @@ mod tests {
         let width = NonZeroU32::new(10).ok_or("10 is not zero")?;
         let height = NonZeroU32::new(10).ok_or("10 is not zero")?;
         let pixels: Vec<u8> = (0..100).map(|i| (i % 256) as u8).collect();
-        let luma_img = LumaImage::new_vec(pixels.clone(), width, height);
+        let luma_img = LumaImage::new_vec(pixels.clone(), width, height).unwrap();
         let original = OriginalImage::Luma8(luma_img);
 
         let dyn_img = original.to_dynamic_image();
@@ -230,7 +234,7 @@ mod tests {
         let height = NonZeroU32::new(10).ok_or("10 is not zero")?;
         // Create 16-bit pixels with values that should convert correctly
         let pixels: Vec<u16> = (0..100).map(|i| (i * 257) as u16).collect(); // Use values that span the range
-        let luma_img = LumaImage::new_vec(pixels.clone(), width, height);
+        let luma_img = LumaImage::new_vec(pixels.clone(), width, height).unwrap();
         let original = OriginalImage::Luma16(luma_img);
 
         let dyn_img = original.to_dynamic_image();
@@ -253,7 +257,7 @@ mod tests {
         let pixels: Vec<[u8; 3]> = (0..100)
             .map(|i| [(i * 3) as u8, (i * 3 + 1) as u8, (i * 3 + 2) as u8])
             .collect();
-        let rgb_img = Image::new_vec(pixels.clone(), width, height);
+        let rgb_img = Image::new_vec(pixels.clone(), width, height).unwrap();
         let original = OriginalImage::Rgb8(rgb_img);
 
         let dyn_img = original.to_dynamic_image();
@@ -282,7 +286,7 @@ mod tests {
                 ]
             })
             .collect();
-        let rgba_img = Image::new_vec(pixels.clone(), width, height);
+        let rgba_img = Image::new_vec(pixels.clone(), width, height).unwrap();
         let original = OriginalImage::Rgba8(rgba_img);
 
         let dyn_img = original.to_dynamic_image();
@@ -305,7 +309,7 @@ mod tests {
         let height = NonZeroU32::new(1).ok_or("1 is not zero")?;
         // Test various 16-bit values
         let pixels: Vec<u16> = vec![0, 128, 256, 512, 65535];
-        let luma_img = LumaImage::new_vec(pixels.clone(), width, height);
+        let luma_img = LumaImage::new_vec(pixels.clone(), width, height).unwrap();
         let original = OriginalImage::Luma16(luma_img);
 
         let dyn_img = original.to_dynamic_image();

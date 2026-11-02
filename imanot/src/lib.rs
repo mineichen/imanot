@@ -102,7 +102,8 @@ impl ImageData {
                         })
                     })
                     .collect();
-                let buffer = RgbImageInterleaved::new_arc(image_data, width, height);
+                let buffer = RgbImageInterleaved::new_arc(image_data, width, height)
+                    .expect("Buffer matches dimensions");
                 ImageLoadOk {
                     original: crate::image_utils::OriginalImage::Rgb8(buffer.clone()),
                     adjust: buffer,
