@@ -1,12 +1,10 @@
-use std::sync::Arc;
-
 use egui::{CursorIcon, Pos2, Vec2};
-use futures::FutureExt;
 use imask::Roi;
 use nalgebra::Point2;
 
 use crate::{
-    AffectedLayer, ImagePainter, ImgPoint, PanTool, RectSelection, Tool, ToolContext, ToolFactory,
+    AffectedLayer, ImageLoadOk, ImagePainter, ImgPoint, MaskImage, PanTool, RectSelection, Tool,
+    ToolContext,
     tool::drag::active_selection::{HoverGesture, LayerSelection},
 };
 
@@ -33,6 +31,8 @@ pub struct DragTool {
     selection: Option<ActiveSelection>,
     gesture: Option<Gesture>,
     settings: DragToolSettings,
+    /// Selected by the next interaction, which is the first to see the masks
+    preselect: Option<AffectedLayer>,
 }
 
 impl DragTool {
@@ -46,26 +46,46 @@ impl DragTool {
         self
     }
 
-    pub fn create_factory() -> ToolFactory {
-        Arc::new(|_| async { Ok(Box::new(DragTool::default()) as Box<dyn Tool>) }.boxed_local())
+    /// Selects the whole `layer` as soon as the tool first sees the masks of a
+    /// shown image, i.e. with its next interaction. Like a click on it, this
+    /// holds incoming images (see [`ToolContext::postpone_new_images`]) until
+    /// the selection is dropped.
+    pub fn preselect_layers(&mut self, layer: impl Into<AffectedLayer>) -> &mut Self {
+        let layer = layer.into();
+        log::info!("[drag] preselect requested for {layer:?}");
+        self.preselect = Some(layer);
+        self
     }
 
-    pub fn create_factory_with(modifier: impl Fn(&mut DragTool) + 'static) -> ToolFactory {
-        Arc::new(move |_| {
-            let mut tool = DragTool::default();
-            modifier(&mut tool);
-            async { Ok(Box::new(tool) as Box<dyn Tool>) }.boxed_local()
-        })
+    fn apply_preselect(&mut self, masks: &MaskImage) {
+        if let Some(layer) = self.preselect.take() {
+            let matching = self.select_layers(masks, layer);
+            log::info!(
+                "[drag] preselect {layer:?}: {matching} matching layers, selection created: {}",
+                self.selection.is_some()
+            );
+        }
     }
 }
 
 impl Tool for DragTool {
     fn handle_interaction(&mut self, ctx: ToolContext) {
+        self.apply_preselect(&ctx.image.masks);
         (self.selection, self.gesture) = self.settings.handle_interaction_immutable(
             ctx,
             self.selection.take(),
             self.gesture.take(),
         );
+    }
+
+    fn update_image(&mut self, _image: &ImageLoadOk) {
+        // Selection and gesture are pixels of the previous image. Keeping them
+        // for an image that has the same layer (e.g. a video) is yet to come.
+        if self.selection.is_some() {
+            log::info!("[drag] selection dropped: new image");
+        }
+        self.selection = None;
+        self.gesture = None;
     }
 }
 
@@ -99,6 +119,8 @@ impl DragToolSettings {
                 } else {
                     selection = Some(sel);
                 }
+            } else {
+                log::info!("[drag] selection dropped: stale (mask history changed)");
             }
         };
         // Escape cancels a running gesture, or drops the idle selection. A
@@ -308,6 +330,8 @@ fn step_transform(
 
 #[cfg(test)]
 mod tests {
+    use std::num::NonZeroU32;
+
     use imask::{ImaskSet, SortedRanges, Span};
     use nalgebra::{Matrix3, Vector2};
 
@@ -316,7 +340,7 @@ mod tests {
     use super::transform::transform_layer;
     use super::*;
     use crate::top_left_of_pixel;
-    use crate::{MaskDefaultActions, MaskImage, TestResult};
+    use crate::{MaskDefaultActions, TestResult};
 
     #[test]
     fn fractional_move_snaps_to_whole_pixels() -> TestResult {
@@ -364,6 +388,32 @@ mod tests {
             Some(expected.spans::<u32>().collect())
         );
         Ok(())
+    }
+
+    fn image_with_width(width: u32) -> crate::ImageLoadOk {
+        let width = NonZeroU32::new(width).expect("Width is not zero");
+        let buffer = crate::RgbImageInterleaved::new_arc(
+            vec![[0u8; 3]; width.get() as usize].into(),
+            width,
+            NonZeroU32::MIN,
+        )
+        .expect("Buffer matches dimensions");
+        crate::ImageLoadOk {
+            original: crate::OriginalImage::Rgb8(buffer.clone()),
+            adjust: buffer,
+        }
+    }
+
+    #[test]
+    fn a_new_image_drops_selection_and_gesture() {
+        let mut masks = mask_blocks();
+        let mut tool = DragTool::default();
+        tool.select_at(&mut masks, top_left_of_pixel(12u32, 12u32), IMG_ROI, false);
+        assert!(tool.selection.is_some());
+
+        tool.update_image(&image_with_width(10));
+        assert!(tool.selection.is_none());
+        assert!(tool.gesture.is_none());
     }
 
     #[test]
@@ -653,6 +703,22 @@ mod tests {
         masks.add(Roi::new(50u16..52, 0..2).into());
         masks.add(Roi::new(0u16..2, 50..52).into());
         masks
+    }
+
+    #[test]
+    fn preselect_selects_the_layer_once_with_the_first_masks_seen() {
+        let masks = mask_with_three_layers();
+        let mut tool = DragTool::default();
+        tool.preselect_layers(0);
+        assert!(tool.selection.is_none());
+
+        tool.apply_preselect(&masks);
+        assert!(tool.selection.is_some());
+
+        // One-shot: a deselected tool doesn't select again
+        tool.selection = None;
+        tool.apply_preselect(&masks);
+        assert!(tool.selection.is_none());
     }
 
     #[test]

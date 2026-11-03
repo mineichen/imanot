@@ -1,14 +1,10 @@
-use std::{
-    ops::{Deref, DerefMut},
-    sync::Arc,
-};
+use std::ops::{Deref, DerefMut};
 
-use futures::FutureExt;
 use imask::{SortedRanges, Span};
 
 use crate::{
     AffectedLayer, CursorImage, DrawTool, MaskActionBuilder, MaskDefaultActions, Mode,
-    RectSelection, Tool, ToolContext, ToolFactory,
+    RectSelection, Tool, ToolContext,
 };
 
 const RECT_CURSOR_IMAGE: CursorImage = CursorImage {
@@ -38,20 +34,6 @@ impl DerefMut for RectTool {
     }
 }
 
-impl RectTool {
-    pub fn create_factory() -> ToolFactory {
-        Arc::new(|_| async { Ok(Box::new(RectTool::default()) as Box<dyn Tool>) }.boxed_local())
-    }
-
-    pub fn create_factory_with(modifier: impl Fn(&mut RectTool) + 'static) -> ToolFactory {
-        Arc::new(move |_| {
-            let mut tool = RectTool::default();
-            modifier(&mut tool);
-            async { Ok(Box::new(tool) as Box<dyn Tool>) }.boxed_local()
-        })
-    }
-}
-
 impl Tool for RectTool {
     fn handle_interaction(&mut self, mut ctx: ToolContext) {
         ctx.cursor_image.set(RECT_CURSOR_IMAGE);
@@ -71,18 +53,12 @@ impl Tool for RectTool {
                 }
             }
         } else if ctx.response.clicked()
-            && let Some((x, y)) = ctx.cursor_image_pos()
+            // The viewer also reacts to clicks beside the image. They are not
+            // clicks on the image and must not end up as its nearest edge pixel.
+            && let Some((x, y)) = ctx.try_pixel_at()
         {
-            let (image_width, image_height) = ctx.image.image.adjust.dimensions();
-
-            let Ok((x, y)) = u16::try_from(image_width.get() - 1)
-                .and_then(|width| {
-                    let height = u16::try_from(image_height.get() - 1)?;
-                    let x = u16::try_from(x)?;
-                    let y = u16::try_from(y)?;
-
-                    Ok((x.min(width), y.min(height)))
-                })
+            let Ok((x, y)) = u16::try_from(x)
+                .and_then(|x| Ok((x, u16::try_from(y)?)))
                 .inspect_err(|e| log::warn!("Cannot to u16: {e:?}"))
             else {
                 return;
@@ -102,5 +78,115 @@ impl Tool for RectTool {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        num::NonZeroU32,
+        sync::{Arc, Mutex},
+    };
+
+    use super::*;
+    use crate::{
+        HistoryStrategy, ImageData, ImageId, ImageLoadOk, ImageState, OriginalImage, PanTool,
+        PixelAreaStack, RgbImageInterleaved, State, Tools,
+    };
+
+    /// A real [`RectTool`] which also tells where the image is drawn on screen
+    struct PlacementSpy {
+        rect: RectTool,
+        image_rect: Arc<Mutex<Option<egui::Rect>>>,
+    }
+
+    impl Tool for PlacementSpy {
+        fn handle_interaction(&mut self, ctx: ToolContext) {
+            *self.image_rect.lock().unwrap() = Some(ctx.painter.image_rect());
+            self.rect.handle_interaction(ctx);
+        }
+    }
+
+    /// The viewer reacts to clicks next to the image as well (e.g. in the bars
+    /// beside a tall image), but such a click is not on the image. The tool
+    /// clamps it to the nearest edge pixel and paints that: a click right of the
+    /// image leaves a stray pixel in its last column, which later turns a
+    /// rectangular mask into "a rectangle and one pixel".
+    #[test]
+    fn click_next_to_the_image_paints_nothing() {
+        let width = NonZeroU32::new(60).expect("60 is not zero");
+        let height = NonZeroU32::new(100).expect("100 is not zero");
+        let buffer = RgbImageInterleaved::new_arc(vec![[0u8; 3]; 60 * 100].into(), width, height)
+            .expect("Buffer matches dimensions");
+        let image_rect = Arc::new(Mutex::new(None));
+        let mut state = State::new(Tools::new(
+            Box::new(PlacementSpy {
+                rect: RectTool::default(),
+                image_rect: image_rect.clone(),
+            }),
+            Box::new(PanTool::default()),
+        ));
+        state.set_image(ImageData::new(
+            ImageId::from("a"),
+            ImageLoadOk {
+                original: OriginalImage::Rgb8(buffer.clone()),
+                adjust: buffer,
+            },
+            PixelAreaStack::default(),
+            HistoryStrategy::Reset,
+        ));
+
+        let egui = egui::Context::default();
+        let mut frame = |events: Vec<egui::Event>| {
+            let input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(800.0, 600.0),
+                )),
+                events,
+                ..Default::default()
+            };
+            egui.run_ui(input, |ui| {
+                state.ui(ui);
+            })
+            .drop_without_applying_deltas();
+        };
+        let button = |pos, pressed| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+
+        // Installs the image, the second frame is the first one the tool sees it in
+        frame(vec![]);
+        frame(vec![]);
+        let image_rect = image_rect.lock().unwrap().expect("The tool ran");
+        let beside = egui::pos2(image_rect.right() + 40.0, image_rect.center().y);
+        assert!(beside.x < 800.0, "Test needs room right of {image_rect:?}");
+
+        frame(vec![egui::Event::PointerMoved(beside)]);
+        frame(vec![button(beside, true)]);
+        frame(vec![button(beside, false)]);
+        frame(vec![]);
+
+        let ImageState::Loaded(loaded) = &state.image_state else {
+            panic!("The image is shown");
+        };
+        let painted = loaded
+            .masks
+            .subgroups_stack()
+            .iter()
+            .flat_map(|(layer, area)| {
+                area.pixels
+                    .spans::<u32>()
+                    .map(move |s| (layer, s.x.start..s.x.end, s.y))
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            painted,
+            [],
+            "Clicking at {beside:?}, right of the image at {image_rect:?}, painted (layer, x, y)"
+        );
     }
 }

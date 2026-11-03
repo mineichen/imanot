@@ -2,13 +2,13 @@ use std::num::NonZeroU16;
 
 use std::any::Any;
 
-use imanot::{BrushTool, DragTool, ImageLoadOk, Mode, PanTool, RectTool, ToolFactory};
+use imanot::{BrushTool, DragTool, ImageLoadOk, Mode, PanTool, RectTool};
 
 mod registry;
 #[cfg(feature = "sam")]
 mod sam;
 
-pub use registry::ToolRegistry;
+pub use registry::{ToolFactory, ToolRegistry};
 
 #[allow(unused_variables)]
 pub fn default_tools(config: &crate::config::Config) -> Vec<(String, ToolFactory)> {
@@ -30,34 +30,45 @@ pub fn default_tools(config: &crate::config::Config) -> Vec<(String, ToolFactory
         }
     };
     vec![
-        ("Pan".to_string(), PanTool::create_factory()),
-        ("Pan2".to_string(), PanTool::create_factory()),
+        ("Pan".to_string(), creator(PanTool::default)),
+        ("Pan2".to_string(), creator(PanTool::default)),
         #[cfg(feature = "sam")]
-        ("SAM".to_string(), sam::SamTool::create_factory(session)),
-        ("Rect".to_string(), RectTool::create_factory()),
+        (
+            "SAM".to_string(),
+            creator(move || sam::SamTool::new(session.clone())),
+        ),
+        ("Rect".to_string(), creator(RectTool::default)),
         (
             "PanDrag".to_string(),
-            DragTool::create_factory_with(|t| {
-                t.set_pan_on_drag(true);
+            creator(|| {
+                let mut tool = DragTool::default();
+                tool.set_pan_on_drag(true);
+                tool
             }),
         ),
         (
             "RectDrag".to_string(),
-            DragTool::create_factory_with(|t| {
-                t.set_pan_on_drag(false);
+            creator(|| {
+                let mut tool = DragTool::default();
+                tool.set_pan_on_drag(false);
+                tool
             }),
         ),
-        ("Brush".to_string(), BrushTool::create_factory()),
+        ("Brush".to_string(), creator(BrushTool::default)),
         (
             "Brush clear".to_string(),
-            BrushTool::create_factory_with(|t| {
-                t.set_mode(Mode::Clear);
+            creator(|| {
+                let mut tool = BrushTool::default();
+                tool.set_mode(Mode::Clear);
+                tool
             }),
         ),
         (
             "Rect clear".to_string(),
-            RectTool::create_factory_with(|t| {
-                t.set_mode(Mode::Clear);
+            creator(|| {
+                let mut tool = RectTool::default();
+                tool.set_mode(Mode::Clear);
+                tool
             }),
         ),
     ]
@@ -92,19 +103,21 @@ pub(super) fn ui(
                 _ => unreachable!("Borrowchecker limitation made it impossible to use callback fn(&mut ToolRegistry, usize)"),
             };
 
-            if let Some(factory) = changed {
-                tool.set_factory(factory, img);
+            if let Some(new_tool) = changed {
+                tool.set(new_tool, Some(img));
             }
-            if let Some(Ok(tool)) = tool.data() {
-                let any: &mut dyn Any = &mut **tool;
-                if let Some(brush) = any.downcast_mut::<BrushTool>() {
-                    ui.horizontal(|ui| {
-                        ui.label("Brush Size (% of viewport):");
-                        const NZ100: NonZeroU16 = NonZeroU16::new(100).unwrap();
-                        ui.add(egui::Slider::new(&mut brush.brush_size, NonZeroU16::MIN..=NZ100).step_by(1.0));
-                    });
-                }
+            let any: &mut dyn Any = tool.tool();
+            if let Some(brush) = any.downcast_mut::<BrushTool>() {
+                ui.horizontal(|ui| {
+                    ui.label("Brush Size (% of viewport):");
+                    const NZ100: NonZeroU16 = NonZeroU16::new(100).unwrap();
+                    ui.add(egui::Slider::new(&mut brush.brush_size, NonZeroU16::MIN..=NZ100).step_by(1.0));
+                });
             }
         });
     }
+}
+
+fn creator<T: imanot::Tool>(f: impl Fn() -> T + 'static) -> ToolFactory {
+    std::rc::Rc::new(move || Box::new(f()) as Box<dyn imanot::Tool>)
 }

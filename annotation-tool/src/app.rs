@@ -1,6 +1,8 @@
+use std::io;
+
 use crate::storage::Storage;
 use egui::{self, InnerResponse, UiBuilder};
-use imanot::{AsyncRefTask, AsyncTask, ImageViewerInteraction, State, Tools};
+use imanot::{AsyncRefTask, AsyncTask, ImageData, ImageViewerInteraction, State, Tools};
 
 use image_selector::ImageSelector;
 use tools::ToolRegistry;
@@ -22,9 +24,13 @@ pub use native::run_native;
 #[cfg(target_arch = "wasm32")]
 pub use web::run_web;
 
+type ImageLoadTask = AsyncTask<io::Result<ImageData>>;
+
 pub(crate) struct ImageViewerApp {
     storage: Box<dyn Storage>,
     selector: ImageSelector,
+    /// Image selected by the user, handed to `state` as soon as it is loaded
+    image_loader: Option<ImageLoadTask>,
     state: State,
     tool_registry: ToolRegistry,
     save_job: AsyncRefTask<Result<(), String>>,
@@ -38,13 +44,14 @@ impl ImageViewerApp {
     ) -> Self {
         let url_loader = Some(AsyncTask::new(storage.list_images()));
         let state = State::new(Tools::new(
-            tool_registry.primary_factory(),
-            tool_registry.secondary_factory(),
+            tool_registry.new_primary(),
+            tool_registry.new_secondary(),
         ));
 
         Self {
             storage,
             selector: ImageSelector::new(url_loader),
+            image_loader: None,
             state,
             tool_registry,
             save_job: AsyncRefTask::new_ready(Ok(())),

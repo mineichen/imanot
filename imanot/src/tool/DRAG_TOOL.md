@@ -136,8 +136,10 @@ hit-tests inside-bbox (move), 8 anchors (resize), rotate handle (rotate) and
 sets cursors; drag starts a gesture with live preview; `drag_stopped` commits
 (unless matrix ~ identity, then no-op); Esc mid-gesture cancels back to last
 committed state; Esc idle or click-empty deselects and drops the snapshot.
-While any pointer button is down, keep `postpone_new_images = true` so `State`
-can't swap images mid-gesture (existing mechanism in `state.rs`).
+While a selection exists, keep `postpone_new_images = true` so `State` doesn't
+swap the image (and recreate the tool) underneath it. `State` itself already
+holds the image while the pointer is down on the viewer, so a running gesture
+needs no extra handling.
 
 Gesture hit-testing (and gesture origins) must use the PRESS position
 (`interact_pointer_pos - total_drag_delta`), not the current position: with
@@ -189,15 +191,16 @@ Add a tiny `revision: u64` counter to `History` (bumped on `push`/`undo`/
 `redo`), exposed as `MaskImage::history_revision()`. The tool records it at
 selection and after each own commit; any mismatch (user hit ctrl-Z, or
 anything else rewrote history mid-selection) **drops the selection**, since
-snapshot/committed no longer match the mask. Known v1 limitation: switching
-the active tool factory recreates the tool instance and also drops the
-selection.
+snapshot/committed no longer match the mask. A new image drops the selection
+too (`Tool::update_image`). Known v1 limitation: switching the active tool
+replaces the tool instance and also drops the selection.
 
 ## Wiring & debug
 
 `annotation-tool/src/app/tools/mod.rs::default_tools` gains
-`("PanDrag", DragTool::create_factory_with(pan_on_drag=true))` and
-`("RectDrag", …false)`, both `AffectedLayer::Unspecified`. Debug/iterate
+`("PanDrag", …)` and `("RectDrag", …)`, each creating a default `DragTool`
+and calling `set_pan_on_drag(true)` / `set_pan_on_drag(false)` on it, both
+`AffectedLayer::Unspecified`. Debug/iterate
 without the heavy SAM dependency:
 
 ```bash

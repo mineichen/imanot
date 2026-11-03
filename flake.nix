@@ -95,8 +95,10 @@
           exec ${pkgs.podman}/bin/podman run --rm -it \
             --network=pasta \
             --tmpfs /tmp \
-            -v "$workspace:/workspace:z" \
-            -w "/workspace/$(basename "$workspace")" \
+            -v "$workspace:/workspace/imanot:z" \
+            -v "../imbuf:/workspace/imbuf:z" \
+            -v "../imask:/workspace/imask:z" \
+            -w "/workspace/imanot" \
             -e HOME=/root \
             ${containername}:latest /bin/entrypoint.sh
         '';

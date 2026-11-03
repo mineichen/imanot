@@ -1,9 +1,6 @@
-use std::sync::Arc;
-
 use futures::FutureExt;
-use imanot::{AsyncRefTask, MaskActionBuilder, RectSelection, Tool, ToolContext, ToolFactory};
+use imanot::{AsyncRefTask, ImageLoadOk, MaskActionBuilder, RectSelection, Tool, ToolContext};
 use imask::{ImaskSet, SortedRanges};
-use imbuf::Image;
 
 use inference::{InferenceError, SamEmbeddings};
 
@@ -13,9 +10,9 @@ mod native_ort;
 pub use native_ort::SamSession;
 
 type RgbImageInterleaved<T> = imbuf::Image<[T; 3], 1>;
-
 pub struct SamTool {
-    embeddings: AsyncRefTask<Result<SamEmbeddings, InferenceError>>,
+    /// `None` until the first image is known
+    embeddings: Option<AsyncRefTask<Result<SamEmbeddings, InferenceError>>>,
     session: SamSession,
     rect_selection: RectSelection,
     // If selection starts, before embeddings are ready
@@ -23,30 +20,34 @@ pub struct SamTool {
 }
 
 impl SamTool {
-    pub fn new(session: SamSession, img: Image<[u8; 3], 1>) -> Self {
+    pub fn new(session: SamSession) -> Self {
         Self {
-            embeddings: AsyncRefTask::new(session.get_image_embeddings(img).boxed()),
+            embeddings: None,
             session,
             rect_selection: RectSelection::default(),
             last_pos: None,
         }
     }
-    pub fn create_factory(session: SamSession) -> ToolFactory {
-        Arc::new(move |img| {
-            let tool = SamTool::new(session.clone(), img.adjust.clone());
-            async move { Ok(Box::new(tool) as Box<dyn Tool>) }.boxed_local()
-        })
-    }
 }
 
 impl Tool for SamTool {
+    fn update_image(&mut self, image: &ImageLoadOk) {
+        self.embeddings = Some(AsyncRefTask::new(
+            self.session
+                .get_image_embeddings(image.adjust.clone())
+                .boxed(),
+        ));
+        self.last_pos = None;
+    }
+
     fn handle_interaction(&mut self, mut ctx: ToolContext) {
         if let Some(rect_result) = self.rect_selection.drag_finished(&mut ctx) {
             self.last_pos = Some(rect_result.bounds());
         }
-        if let (Some([[top_x, top_y], [bottom_x, bottom_y]]), Some(Ok(loaded_embeddings))) =
-            (self.last_pos, self.embeddings.data())
-        {
+        if let (Some([[top_x, top_y], [bottom_x, bottom_y]]), Some(Ok(loaded_embeddings))) = (
+            self.last_pos,
+            self.embeddings.as_mut().and_then(|e| e.data()),
+        ) {
             let new_mask = self
                 .session
                 .decode_prompt(

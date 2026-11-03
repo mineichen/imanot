@@ -151,6 +151,11 @@ impl MaskImage {
         }
     }
 
+    /// Image dimensions `[width, height]` these masks are bound to.
+    pub(crate) fn size(&self) -> [usize; 2] {
+        self.size
+    }
+
     pub fn set_settings(&mut self, settings: MaskSettings) {
         self.settings = settings;
     }

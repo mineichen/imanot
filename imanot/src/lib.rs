@@ -21,8 +21,6 @@ pub use image_utils::*;
 pub use imbuf::Image;
 pub use state::*;
 
-pub type ToolTask = AsyncRefTask<Result<Box<dyn Tool>, String>>;
-
 pub use mask::*;
 pub use pixel_range::*;
 pub use tool::*;

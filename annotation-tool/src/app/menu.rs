@@ -23,11 +23,23 @@ impl crate::app::ImageViewerApp {
                     ui.disable();
                 }
                 if let Some(id) = self.selector.ui(&*self.storage, ui) {
-                    self.state.image_state = ImageState::LoadingImageData(AsyncTask::new(
-                        self.storage.load_image(&id).boxed(),
-                    ));
+                    self.image_loader = Some(AsyncTask::new(self.storage.load_image(&id).boxed()));
                 }
             });
+
+            // The previous image stays visible until the selected one is loaded
+            if let Some(loader) = &mut self.image_loader
+                && let Some(loaded) = loader.data()
+            {
+                self.image_loader = None;
+                match loaded {
+                    // Explicit navigation must not be held back by a tool's selection
+                    Ok(data) => self.state.set_image_now(data),
+                    Err(e) => {
+                        self.state.image_state = ImageState::Error(format!("IO Error: {e}"));
+                    }
+                }
+            }
 
             if let (
                 Some(last_save),

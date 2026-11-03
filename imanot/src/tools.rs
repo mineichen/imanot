@@ -1,75 +1,56 @@
-use std::sync::Arc;
-
-use futures::FutureExt;
-
-use crate::{AsyncRefTask, ImageLoadOk, PanTool, Tool, ToolTask};
-
-/// Tool factory function that creates a tool for a given image.
-/// Cheaply cloneable (`Arc`) so it can live in a tool registry while also being
-/// handed to the active primary/secondary slots.
-pub type ToolFactory =
-    Arc<dyn Fn(&ImageLoadOk) -> crate::LocalBoxFuture<'static, Result<Box<dyn Tool>, String>>>;
+use crate::{ImageLoadOk, PanTool, Tool};
 
 /// Core tool management without UI concerns.
 ///
-/// Holds a single [`ToolFactory`] per slot (primary/secondary) so tools can be
-/// recreated whenever the underlying image changes. The registry of available
-/// tools and their display names lives in the embedding application.
+/// Holds one tool per slot (primary/secondary). Tools are plain values: they
+/// are created without an image and keep their state and configuration when
+/// the image changes. They are told about every new image through
+/// [`Tool::update_image`], whether they are the active one or not.
+/// The registry of available tools and their display names lives in the
+/// embedding application.
 pub struct Tools {
-    primary_factory: ToolFactory,
-    primary_tool: ToolTask,
-    secondary_factory: ToolFactory,
-    secondary_tool: ToolTask,
+    primary: Box<dyn Tool>,
+    secondary: Box<dyn Tool>,
 }
 
 pub struct ToolHandle<'a> {
-    factory: &'a mut ToolFactory,
-    tool: &'a mut ToolTask,
+    tool: &'a mut Box<dyn Tool>,
 }
 
 impl<'a> ToolHandle<'a> {
-    /// (Re)create the tool from its factory for the given image.
-    pub fn load(&mut self, img: &ImageLoadOk) {
-        log::debug!("Loading tool");
-        *self.tool = AsyncRefTask::new((self.factory)(img));
-    }
-    /// Replace the slot's factory and immediately (re)load with the given image.
-    /// Returns true if the factory actually changed.
-    pub fn set_factory(&mut self, factory: ToolFactory, img: &ImageLoadOk) -> bool {
-        if Arc::ptr_eq(self.factory, &factory) {
-            return false;
+    /// Replaces the slot's tool. If an image is already shown, the new tool
+    /// receives it through [`Tool::update_image`] right away, otherwise with
+    /// the first image that is shown.
+    pub fn set(&mut self, tool: Box<dyn Tool>, img: Option<&ImageLoadOk>) {
+        log::info!("[tools] tool set, image already shown: {}", img.is_some());
+        *self.tool = tool;
+        if let Some(img) = img {
+            self.tool.update_image(img);
         }
-        *self.factory = factory;
-        self.load(img);
-        true
     }
-    pub fn data(&mut self) -> Option<&mut Result<Box<dyn Tool + 'static>, String>> {
-        self.tool.data()
+
+    pub fn tool(&mut self) -> &mut dyn Tool {
+        &mut **self.tool
     }
 }
 
 impl Default for Tools {
     fn default() -> Self {
-        Self::new(nop_factory(), PanTool::create_factory())
+        Self::new(Box::new(NopTool), Box::new(PanTool::default()))
     }
 }
 
 impl Tools {
-    /// Create a new Tools instance with the given primary and secondary factories.
-    /// The actual tool instances are created lazily on the first [`ToolHandle::load`]
-    /// (e.g. when an image becomes available); until then placeholder tools are used.
-    pub fn new(primary_factory: ToolFactory, secondary_factory: ToolFactory) -> Self {
-        Self {
-            primary_factory,
-            primary_tool: AsyncRefTask::new_ready(Ok(Box::new(NopTool))),
-            secondary_factory,
-            secondary_tool: AsyncRefTask::new_ready(Ok(Box::new(PanTool::default()))),
-        }
+    /// Create a new Tools instance with the given primary and secondary tools.
+    /// They get their first image through [`Tool::update_image`] once one is shown.
+    pub fn new(primary: Box<dyn Tool>, secondary: Box<dyn Tool>) -> Self {
+        Self { primary, secondary }
     }
 
-    pub(crate) fn load(&mut self, i: &ImageLoadOk) {
-        self.primary().load(i);
-        self.secondary().load(i);
+    /// Hands a newly shown image to both tools, the active and the inactive one.
+    pub(crate) fn update_image(&mut self, i: &ImageLoadOk) {
+        self.primary.update_image(i);
+        self.secondary.update_image(i);
     }
 
     pub fn primary(&mut self) -> ToolHandle<'_> {
@@ -83,19 +64,13 @@ impl Tools {
     pub fn handles(&mut self) -> [ToolHandle<'_>; 2] {
         [
             ToolHandle {
-                factory: &mut self.primary_factory,
-                tool: &mut self.primary_tool,
+                tool: &mut self.primary,
             },
             ToolHandle {
-                factory: &mut self.secondary_factory,
-                tool: &mut self.secondary_tool,
+                tool: &mut self.secondary,
             },
         ]
     }
-}
-
-fn nop_factory() -> ToolFactory {
-    Arc::new(|_| async { Ok(Box::new(NopTool) as Box<dyn Tool>) }.boxed_local())
 }
 
 /// A no-operation tool used as placeholder
@@ -103,5 +78,27 @@ struct NopTool;
 impl Tool for NopTool {
     fn handle_interaction(&mut self, _ctx: crate::ToolContext) {
         log::debug!("NopTool was called");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::any::Any;
+
+    use super::*;
+    use crate::BrushTool;
+
+    #[test]
+    fn boxed_tools_can_still_be_downcast_to_their_type() {
+        let boxed: Box<dyn Tool> = Box::new(BrushTool::default());
+        let mut tools = Tools::new(boxed, Box::new(PanTool::default()));
+        let boxed: Box<dyn Tool> = Box::new(BrushTool::default());
+        tools.secondary().set(boxed, None);
+
+        let [mut primary, mut secondary] = tools.handles();
+        let any: &mut dyn Any = primary.tool();
+        assert!(any.downcast_mut::<BrushTool>().is_some(), "Tools::new");
+        let any: &mut dyn Any = secondary.tool();
+        assert!(any.downcast_mut::<BrushTool>().is_some(), "ToolHandle::set");
     }
 }

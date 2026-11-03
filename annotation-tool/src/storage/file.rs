@@ -33,34 +33,36 @@ impl FileStorage {
                     .extension()?
                     .to_str()
                     .and_then(|s| Kind::from_str(s).ok())?;
-                Some((
-                    path.file_stem()
-                        .expect("exists_if_extension_exists")
-                        .to_string_lossy()
-                        .to_string(),
-                    kind,
-                    path.to_str()?.into(),
-                ))
+                // Files belong together if they only differ in the extension.
+                // The directory is part of the key: the tree is scanned
+                // recursively and the same name may exist in several folders.
+                Some((path.with_extension(""), kind, path.to_str()?.into()))
             })
             .sorted_unstable()
-            .chunk_by(|x| x.0.to_string()) // Pitty...
+            .chunk_by(|x| x.0.clone()) // Pitty...
             .into_iter()
-            .filter_map(|(_, mut members)| {
-                let (name, kind, id) = members.next().expect("Needs one item to form a group");
+            .filter_map(|(key, mut members)| {
+                let name = || {
+                    key.file_name()
+                        .expect("exists_if_extension_exists")
+                        .to_string_lossy()
+                        .to_string()
+                };
+                let (_, kind, id) = members.next().expect("Needs one item to form a group");
                 match (kind, members.next()) {
                     (Kind::Mask, None) => None,
                     (Kind::Mask, Some((_, Kind::Mask, _))) => {
-                        unreachable!("Cannot have multiple file_stem.mask")
+                        unreachable!("Same directory and stem, so the same `.masks` file twice")
                     }
                     // Takeing any image is fine, ignore the rest
-                    (Kind::Mask, Some((name, Kind::Image, id))) => Some(ImageListTaskItem {
+                    (Kind::Mask, Some((_, Kind::Image, id))) => Some(ImageListTaskItem {
                         id,
-                        name,
+                        name: name(),
                         has_masks: true,
                     }),
                     (Kind::Image, _) => Some(ImageListTaskItem {
                         id,
-                        name,
+                        name: name(),
                         has_masks: false,
                     }),
                 }
@@ -318,4 +320,52 @@ pub fn visit_directory_files(
         }
     }
     one_level(path.into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn same_names_in_different_directories_are_listed_separately() {
+        let dir = tempfile::tempdir().expect("Temp dir is created");
+        let root = dir.path();
+        for sub in ["a", "b"] {
+            std::fs::create_dir(root.join(sub)).expect("Dir is created");
+        }
+        // The very same names twice, one of them with masks, plus masks without an image
+        for file in [
+            "a/foo.png",
+            "a/foo.masks",
+            "b/foo.png",
+            "b/foo.masks",
+            "b/lonely.masks",
+            "a/bar.jpg",
+            "readme.txt",
+        ] {
+            std::fs::write(root.join(file), b"").expect("File is written");
+        }
+
+        let mut items =
+            FileStorage::list_images_blocking(root.to_path_buf()).expect("Listing works");
+        items.sort_by(|x, y| x.id.cmp(&y.id));
+
+        let listed: Vec<_> = items
+            .iter()
+            .map(|i| {
+                let relative = std::path::Path::new(&*i.id)
+                    .strip_prefix(root)
+                    .expect("Below root");
+                (relative.to_owned(), i.name.as_str(), i.has_masks)
+            })
+            .collect();
+        assert_eq!(
+            listed,
+            [
+                (PathBuf::from("a/bar.jpg"), "bar", false),
+                (PathBuf::from("a/foo.png"), "foo", true),
+                (PathBuf::from("b/foo.png"), "foo", true),
+            ]
+        );
+    }
 }

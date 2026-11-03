@@ -14,7 +14,9 @@ use std::any::Any;
 use std::num::NonZeroU32;
 
 use crate::geometry::scalar_from_f32;
-use crate::{AffectedLayer, CursorImageSystem, ImageStateLoaded, ImageViewer, ImgPoint, U20F12};
+use crate::{
+    AffectedLayer, CursorImageSystem, ImageLoadOk, ImageStateLoaded, ImageViewer, ImgPoint, U20F12,
+};
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub enum Mode {
@@ -25,6 +27,14 @@ pub enum Mode {
 
 pub trait Tool: Any {
     fn handle_interaction(&mut self, ctx: ToolContext);
+
+    /// Called whenever a new image is shown, for the active and the inactive
+    /// tool alike, and when a tool is set while an image is already shown.
+    ///
+    /// Tools live across images, so they keep their configuration (e.g. mode,
+    /// brush size) and may keep state. Override this to drop what is only
+    /// valid for the previous image. Most tools don't care.
+    fn update_image(&mut self, _image: &ImageLoadOk) {}
 }
 
 #[derive(Default)]
@@ -112,6 +122,21 @@ impl ImagePainter {
         (x, y)
     }
 
+    /// Like [`ImagePainter::pixel_at`], but `None` for a position outside of
+    /// the image instead of its nearest edge pixel. The viewer also reacts to
+    /// pointers beside the image (e.g. in the bars next to a tall one), which
+    /// are not on any pixel.
+    pub fn try_pixel_at(
+        pos: ImgPoint,
+        width: NonZeroU32,
+        height: NonZeroU32,
+    ) -> Option<(u32, u32)> {
+        let x_range = U20F12::ZERO..U20F12::saturating_from_num(width.get());
+        let y_range = U20F12::ZERO..U20F12::saturating_from_num(height.get());
+        (x_range.contains(&pos.x) && y_range.contains(&pos.y))
+            .then_some((pos.x.to_num::<u32>(), pos.y.to_num::<u32>()))
+    }
+
     /// Draw a black-white dotted rectangle from corner to corner (screen coordinates)
     pub fn draw_dotted_rect(&self, start: egui::Pos2, end: egui::Pos2) {
         let rect = egui::Rect::from_two_pos(start, end);
@@ -164,6 +189,13 @@ pub struct ToolContext<'a> {
     pub painter: &'a mut ImagePainter,
     pub viewer: &'a mut ImageViewer,
     pub cursor_image: &'a mut CursorImageSystem,
+    /// Set to `true` while the tool holds state tied to the current image
+    /// (e.g. a selection or a running gesture). The current frame then keeps
+    /// back any image passed to [`State::set_image`](crate::State::set_image)
+    /// instead of replacing it, and does not process it in any way until a
+    /// frame in which nobody sets it anymore. It starts out `false` each frame,
+    /// and the pointer being down on the viewer holds the image without tool
+    /// help.
     pub postpone_new_images: &'a mut bool,
 }
 
@@ -212,6 +244,14 @@ impl<'a> ToolContext<'a> {
             .interact_pointer_pos()
             .map(|screen_pos| self.painter.screen_to_image(screen_pos))
     }
+
+    /// The pixel of the shown image under the cursor. `None` if the cursor is
+    /// not over the widget (see [`ToolContext::cursor_image_posf`]) or beside
+    /// the image (see [`ImagePainter::try_pixel_at`]).
+    pub fn try_pixel_at(&self) -> Option<(u32, u32)> {
+        let (width, height) = self.image.image.adjust.dimensions();
+        ImagePainter::try_pixel_at(self.cursor_image_posf()?, width, height)
+    }
 }
 
 #[cfg(test)]
@@ -248,6 +288,19 @@ mod tests {
         assert_eq!(ImagePainter::pixel_at(pt(15.0, 9.49), w, h), (9, 9));
         // Beyond the image: clamped to the last pixel.
         assert_eq!(ImagePainter::pixel_at(pt(100.0, 200.0), w, h), (9, 9));
+    }
+
+    #[test]
+    fn try_pixel_at_is_none_outside_of_the_image() {
+        let (w, h) = dims(10);
+        assert_eq!(ImagePainter::try_pixel_at(pt(0.0, 0.0), w, h), Some((0, 0)));
+        assert_eq!(
+            ImagePainter::try_pixel_at(pt(9.99, 9.99), w, h),
+            Some((9, 9))
+        );
+        // The far edge belongs to no pixel, nor does anything beyond it
+        assert_eq!(ImagePainter::try_pixel_at(pt(10.0, 5.0), w, h), None);
+        assert_eq!(ImagePainter::try_pixel_at(pt(5.0, 10.0), w, h), None);
     }
 
     #[test]

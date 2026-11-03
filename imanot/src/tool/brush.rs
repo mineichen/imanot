@@ -1,16 +1,14 @@
 use std::{
-    num::{NonZero, NonZeroU16},
+    num::{NonZero, NonZeroU16, NonZeroU32},
     ops::{Deref, DerefMut},
-    sync::Arc,
 };
 
 use egui::{Color32, ColorImage, TextureHandle, TextureOptions};
-use futures::FutureExt;
 use imask::{BitmapToSpanIter, Roi, SortedRanges, WithRoi};
 
 use crate::{
-    AffectedLayer, DrawTool, ImagePainter, MaskActionBuilder, MaskDefaultActions, Mode, Tool,
-    ToolContext, ToolFactory, top_left_of_pixel,
+    AffectedLayer, DrawTool, ImageLoadOk, ImagePainter, MaskActionBuilder, MaskDefaultActions,
+    Mode, Tool, ToolContext, top_left_of_pixel,
 };
 
 struct StrokeState {
@@ -206,6 +204,8 @@ pub struct BrushTool {
     /// image-pixel area is derived from the current zoom level.
     pub brush_size: NonZeroU16,
     stroke: Option<StrokeState>,
+    /// Dimensions of the image `stroke` is sized for
+    image_size: Option<(NonZeroU32, NonZeroU32)>,
 }
 
 impl DerefMut for BrushTool {
@@ -228,6 +228,7 @@ impl Default for BrushTool {
             brush_size: DEFAULT_BRUSH_SIZE,
             draw_tool: DrawTool::default(),
             stroke: None,
+            image_size: None,
         }
     }
 }
@@ -238,21 +239,18 @@ impl BrushTool {
         self.brush_size = size;
         self
     }
-
-    pub fn create_factory() -> ToolFactory {
-        Arc::new(|_| async { Ok(Box::new(BrushTool::default()) as Box<dyn Tool>) }.boxed_local())
-    }
-
-    pub fn create_factory_with(modifier: impl Fn(&mut BrushTool) + 'static) -> ToolFactory {
-        Arc::new(move |_| {
-            let mut tool = BrushTool::default();
-            modifier(&mut tool);
-            async { Ok(Box::new(tool) as Box<dyn Tool>) }.boxed_local()
-        })
-    }
 }
 
 impl Tool for BrushTool {
+    fn update_image(&mut self, image: &ImageLoadOk) {
+        // The stroke buffer is sized for the previous image: it stays valid
+        // as long as the new image has the same dimensions
+        let size = (image.original.width(), image.original.height());
+        if self.image_size.replace(size) != Some(size) {
+            self.stroke = None;
+        }
+    }
+
     fn handle_interaction(&mut self, ctx: ToolContext) {
         let image_width = ctx.image.image.original.width();
         let image_height = ctx.image.image.original.height();

@@ -1,20 +1,11 @@
-use std::sync::Arc;
-
 use egui::{CursorIcon, Vec2};
-use futures::FutureExt;
 
-use crate::{Tool, ToolContext, ToolFactory};
+use crate::{Tool, ToolContext};
 
 /// Pan tool for moving the viewport around the image
 #[derive(Default)]
 #[non_exhaustive]
 pub struct PanTool;
-
-impl PanTool {
-    pub fn create_factory() -> ToolFactory {
-        Arc::new(|_| async { Ok(Box::new(PanTool::default()) as Box<dyn Tool>) }.boxed_local())
-    }
-}
 
 impl Tool for PanTool {
     fn handle_interaction(&mut self, ctx: ToolContext) {

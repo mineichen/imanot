@@ -87,9 +87,12 @@ impl DragTool {
 
     /// Programmatically select whole mask layers (see
     /// [`DragTool::calc_select_layers`]); any in-progress gesture is dropped.
-    pub fn select_layers(&mut self, masks: &MaskImage, layer: impl Into<AffectedLayer>) {
+    /// Returns the number of layers `layer` matched.
+    pub fn select_layers(&mut self, masks: &MaskImage, layer: impl Into<AffectedLayer>) -> usize {
         let update = self.settings.calc_select_layers(masks, layer);
+        let matching = update.layers.len();
         self.selection = update.apply(self.selection.take());
+        matching
     }
 }
 impl DragToolSettings {
