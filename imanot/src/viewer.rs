@@ -52,6 +52,39 @@ impl ImageViewer {
         (fit_scale / (viewport_size.min_elem() * MAX_PIXEL_VIEWPORT_FRACTION)).min(1.0)
     }
 
+    /// Zoom by `factor` while keeping the image point under the cursor fixed.
+    ///
+    /// `cursor_image` is the image-space point under the cursor and
+    /// `cursor_from_center` is the vector from that point on screen to the
+    /// viewport center. The zoom is clamped to the valid range; if that
+    /// clamping means the zoom does not actually change (for example while
+    /// scrolling further at the deepest zoom-in), the pan offset is left
+    /// untouched instead of drifting towards the cursor.
+    pub fn zoom_at_cursor(
+        &mut self,
+        factor: f32,
+        cursor_image: Vec2,
+        cursor_from_center: Vec2,
+        original_image_size: Vec2,
+        viewport_size: Vec2,
+    ) {
+        let fit_scale =
+            (viewport_size.x / original_image_size.x).min(viewport_size.y / original_image_size.y);
+        let min_zoom = Self::compute_min_zoom(fit_scale, viewport_size);
+
+        let old_zoom = self.zoom.clamp(min_zoom, 1.0);
+        let new_zoom = (old_zoom / factor).clamp(min_zoom, 1.0);
+        self.zoom = new_zoom;
+
+        if (new_zoom - old_zoom).abs() <= f32::EPSILON {
+            return;
+        }
+
+        let render_scale = fit_scale / new_zoom;
+        let center = cursor_image + cursor_from_center / render_scale;
+        self.pan_offset = center / original_image_size;
+    }
+
     pub fn pan_offset(&self) -> Vec2 {
         self.pan_offset
     }
@@ -271,5 +304,54 @@ mod tests {
         viewer.modify_zoom(|z| z * 10.0);
         assert_eq!(viewer.zoom, 1.0);
         assert_eq!(viewer.zoom(), 1.0);
+    }
+
+    #[test]
+    fn zooming_past_deepest_limit_does_not_pan_towards_off_center_cursor() {
+        // 400x400 image in a 1000x800 viewport: fit_scale = 2, deepest
+        // allowed zoom = 0.05 (one pixel covers 1/20 of the smaller side).
+        let image_size = Vec2::new(400.0, 400.0);
+        let viewport_size = Vec2::new(1000.0, 800.0);
+        let min_zoom = ImageViewer::compute_min_zoom(2.0, viewport_size);
+
+        let mut viewer = ImageViewer {
+            zoom: min_zoom,
+            pan_offset: Vec2::new(0.3, 0.6),
+        };
+        let pan_before = viewer.pan_offset();
+
+        // Off-center cursor, scrolling further into the limit. Previously this
+        // applied an out-of-range zoom for one frame, which shifted the pan.
+        viewer.zoom_at_cursor(
+            1.5,
+            Vec2::new(200.0, 240.0),
+            Vec2::new(120.0, -80.0),
+            image_size,
+            viewport_size,
+        );
+
+        assert_eq!(viewer.zoom(), min_zoom);
+        assert_eq!(viewer.pan_offset(), pan_before);
+    }
+
+    #[test]
+    fn zooming_within_limit_keeps_image_point_under_cursor() {
+        let image_size = Vec2::new(400.0, 400.0);
+        let viewport_size = Vec2::new(1000.0, 800.0);
+        let fit_scale = 2.0;
+        let from_center = Vec2::new(120.0, -80.0);
+
+        let mut viewer = ImageViewer {
+            zoom: 0.5,
+            pan_offset: Vec2::new(0.4, 0.5),
+        };
+        let old_render_scale = fit_scale / viewer.zoom();
+        let cursor_image = viewer.pan_offset() * image_size - from_center / old_render_scale;
+
+        viewer.zoom_at_cursor(2.0, cursor_image, from_center, image_size, viewport_size);
+
+        let new_render_scale = fit_scale / viewer.zoom();
+        let cursor_image_after = viewer.pan_offset() * image_size - from_center / new_render_scale;
+        assert!((cursor_image_after - cursor_image).length() < 1e-4);
     }
 }

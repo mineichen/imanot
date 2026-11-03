@@ -56,12 +56,13 @@ impl Tool for PanTool {
             // no shift between the two conventions is needed.
             let cursor = ctx.painter.screen_to_image(hover);
             let cursor_img = Vec2::new(cursor.x.to_num::<f32>(), cursor.y.to_num::<f32>());
-            viewer.modify_zoom(|x| x / factor);
-            let render_scale = fit_scale / viewer.zoom();
-
-            // Keep the image point under the cursor fixed while zooming
-            let center = cursor_img + (viewport_rect.center() - hover) / render_scale;
-            viewer.set_pan_offset(center / original_image_size);
+            viewer.zoom_at_cursor(
+                factor,
+                cursor_img,
+                viewport_rect.center() - hover,
+                original_image_size,
+                viewport_size,
+            );
         }
 
         if let Some(drag_delta) = drag_delta {
