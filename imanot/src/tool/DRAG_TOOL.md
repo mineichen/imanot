@@ -57,10 +57,12 @@ API signature) to build matrices:
 
 - move → translation matrix from pointer delta (image px);
 - resize → scale about the opposite anchor (or bbox center), factors from
-  pointer delta / bbox size; two-axis (corner) anchors preserve the aspect
-  ratio with a single factor, picked by pointer slope vs. box diagonal so the
-  dragged edge under the cursor stays a visible segment — unless Shift is
-  held, which frees them (single-axis edge anchors always scale freely);
+  pointer delta / bbox size; two-axis (corner) anchors scale each axis freely
+  by default. With `DragTool::set_keep_aspect_ratio(true)` they preserve the
+  aspect ratio with a single factor, picked by pointer slope vs. box diagonal
+  so the dragged edge under the cursor stays a visible segment. Holding Shift
+  inverts the option for the running resize (single-axis edge anchors always
+  scale freely);
 - rotate → rotation about bbox center from pointer-angle delta around the
   center (Shift gives the exact unsnapped angle, see `ROTATE_SNAP_DEG` below).
 

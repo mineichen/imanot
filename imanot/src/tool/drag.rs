@@ -46,6 +46,15 @@ impl DragTool {
         self
     }
 
+    /// Whether resizing from a handle that moves two sides at once keeps the
+    /// selection's aspect ratio. Holding Shift during the resize does the
+    /// opposite. Off by default: the ratio follows the pointer, and Shift
+    /// keeps it. Handles that move a single side always resize freely.
+    pub fn set_keep_aspect_ratio(&mut self, keep_aspect_ratio: bool) -> &mut Self {
+        self.settings.keep_aspect_ratio = keep_aspect_ratio;
+        self
+    }
+
     /// Selects the whole `layer` as soon as the tool first sees the masks of a
     /// shown image, i.e. with its next interaction. Like a click on it, this
     /// holds incoming images (see [`ToolContext::postpone_new_images`]) until
@@ -94,6 +103,8 @@ struct DragToolSettings {
     layer: AffectedLayer,
     /// Dragging on empty space pans instead of rect-selecting.
     pub pan_on_drag: bool,
+    /// See [`DragTool::set_keep_aspect_ratio`].
+    keep_aspect_ratio: bool,
 }
 
 impl DragToolSettings {
@@ -240,6 +251,7 @@ impl DragToolSettings {
             let press = Point2::new(pointer.x.to_num::<f32>(), pointer.y.to_num::<f32>());
             let part = active_selection::hit_test(ctx, press_screen, s);
             TransformGesture::begin(part, press, s.snapshot_transform())
+                .map(|t| t.keep_aspect_ratio(self.keep_aspect_ratio))
         });
         match r {
             Some(transform) => Some(Gesture::Transform(transform)),
@@ -311,7 +323,7 @@ fn step_transform(
         return (None, None);
     };
     // Shift alters the active gesture: exact unsnapped rotation angles,
-    // or a corner resize free of the aspect-ratio lock.
+    // or the opposite of `keep_aspect_ratio` for a two-axis resize.
     let shift = ctx.egui.input(|i| i.modifiers.shift);
     if let Some(p) = pointer {
         sel.apply_gesture(&transform, p, shift);

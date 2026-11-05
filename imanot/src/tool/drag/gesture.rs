@@ -20,6 +20,9 @@ pub(super) struct TransformGesture {
     kind: TransformKind,
     base: Frame,
     base_total: Matrix3<f32>,
+    /// Two-axis resizes keep the aspect ratio, see
+    /// [`DragTool::set_keep_aspect_ratio`](super::DragTool::set_keep_aspect_ratio).
+    keep_aspect_ratio: bool,
 }
 
 enum TransformKind {
@@ -56,14 +59,23 @@ impl TransformGesture {
             kind,
             base,
             base_total,
+            keep_aspect_ratio: false,
         })
+    }
+
+    /// Makes two-axis resizes keep the aspect ratio unless Shift is held,
+    /// instead of keeping it only while Shift is held.
+    #[must_use]
+    pub(super) fn keep_aspect_ratio(mut self, keep: bool) -> Self {
+        self.keep_aspect_ratio = keep;
+        self
     }
 
     /// Recompute `(frame, total)` from the current pointer (image
     /// coordinates). Pure: both state halves derive from the same gesture
     /// parameters, so overlay and rasterization can never drift apart.
-    /// `shift` gives exact unsnapped rotation angles, or a corner resize
-    /// free of the aspect-ratio lock.
+    /// `shift` gives exact unsnapped rotation angles, or inverts whether a
+    /// two-axis resize keeps the aspect ratio.
     pub(super) fn apply(&self, pointer: Point2<f32>, shift: bool) -> (Frame, Matrix3<f32>) {
         match self.kind {
             TransformKind::Move { start } => self.apply_move(start, pointer),
@@ -111,8 +123,9 @@ impl TransformGesture {
     }
 
     /// Resize along the frame's own axes, so rotated boxes resize correctly.
-    /// `shift` (Shift held) frees two-axis (corner) anchors from the
-    /// aspect-ratio lock.
+    /// Two-axis anchors keep the aspect ratio if exactly one of
+    /// `keep_aspect_ratio` and `shift` (Shift held) is set; single-axis
+    /// anchors always scale freely.
     fn apply_resize(
         &self,
         anchor: Anchor,
@@ -136,7 +149,7 @@ impl TransformGesture {
         if scale_v {
             half.y = clamp_half(base.half.y + s.y * d.y / 2.0);
         }
-        if !shift && scale_u && scale_v {
+        if self.keep_aspect_ratio != shift && scale_u && scale_v {
             half = locked_halves(base.half, s, d);
         }
         let mut center = base.center;
@@ -272,37 +285,44 @@ mod tests {
     }
 
     #[test]
-    fn corner_resize_locks_aspect_ratio() -> TestResult {
+    fn corner_resize_keeps_aspect_ratio_with_either_option_or_shift() -> TestResult {
         // 10x5 content (center (15, 12.5), half (5, 2.5)): dragging the SE
         // corner scales both axes by one factor, picked so the cursor stays
         // on a visible edge segment.
-        for (to, half, center) in [
-            ((25.0, 15.0), (7.5, 3.75), (17.5, 13.75)),
-            ((22.5, 20.0), (10.0, 5.0), (20.0, 15.0)),
-            ((24.0, 17.5), (7.5, 3.75), (17.5, 13.75)),
-        ] {
-            let gesture = resize(Anchor::Se, pt(20.0, 15.0), wide())?;
-            let (frame, _) = gesture.apply(pt(to.0, to.1), false);
-            assert_eq!(frame.half, Vector2::new(half.0, half.1));
-            assert_eq!(frame.center, pt(center.0, center.1));
+        for (keep_aspect_ratio, shift) in [(true, false), (false, true)] {
+            let gesture =
+                || -> TestResult<TransformGesture> {
+                    Ok(resize(Anchor::Se, pt(20.0, 15.0), wide())?
+                        .keep_aspect_ratio(keep_aspect_ratio))
+                };
+            for (to, half, center) in [
+                ((25.0, 15.0), (7.5, 3.75), (17.5, 13.75)),
+                ((22.5, 20.0), (10.0, 5.0), (20.0, 15.0)),
+                ((24.0, 17.5), (7.5, 3.75), (17.5, 13.75)),
+            ] {
+                let (frame, _) = gesture()?.apply(pt(to.0, to.1), shift);
+                assert_eq!(frame.half, Vector2::new(half.0, half.1));
+                assert_eq!(frame.center, pt(center.0, center.1));
+            }
+            // Pivot (NW corner) fixed by the total matrix.
+            let (_, total) = gesture()?.apply(pt(25.0, 15.0), shift);
+            let p = total * Vector3::new(10.0, 10.0, 1.0);
+            assert!((p.x - 10.0).abs() < 1e-9, "{p:?}");
+            assert!((p.y - 10.0).abs() < 1e-9, "{p:?}");
         }
-        // Pivot (NW corner) fixed by the total matrix.
-        let gesture = resize(Anchor::Se, pt(20.0, 15.0), wide())?;
-        let (_, total) = gesture.apply(pt(25.0, 15.0), false);
-        let p = total * Vector3::new(10.0, 10.0, 1.0);
-        assert!((p.x - 10.0).abs() < 1e-9, "{p:?}");
-        assert!((p.y - 10.0).abs() < 1e-9, "{p:?}");
         Ok(())
     }
 
     #[test]
-    fn shift_corner_resize_destroys_aspect_ratio() -> TestResult {
-        // Holding Shift frees the corner anchors: each axis follows the
-        // pointer independently, like edge anchors always do.
-        let gesture = resize(Anchor::Se, pt(20.0, 15.0), wide())?;
-        let (frame, _) = gesture.apply(pt(25.0, 15.0), true);
-        assert_eq!(frame.half, Vector2::new(7.5, 2.5));
-        assert_eq!(frame.center, pt(17.5, 12.5));
+    fn corner_resize_is_free_by_default_and_with_both_option_and_shift() -> TestResult {
+        // Each axis follows the pointer independently, like edge anchors always do.
+        for (keep_aspect_ratio, shift) in [(false, false), (true, true)] {
+            let gesture =
+                resize(Anchor::Se, pt(20.0, 15.0), wide())?.keep_aspect_ratio(keep_aspect_ratio);
+            let (frame, _) = gesture.apply(pt(25.0, 15.0), shift);
+            assert_eq!(frame.half, Vector2::new(7.5, 2.5));
+            assert_eq!(frame.center, pt(17.5, 12.5));
+        }
         Ok(())
     }
 }
