@@ -26,6 +26,25 @@ pub use web::run_web;
 
 type ImageLoadTask = AsyncTask<io::Result<ImageData>>;
 
+#[cfg(not(any(feature = "glow", feature = "wgpu")))]
+compile_error!("Enable a renderer: the `glow` or `wgpu` feature");
+
+/// A state drawing with the renderer eframe picked.
+fn new_state(cc: &eframe::CreationContext<'_>, tools: Tools) -> State {
+    #[cfg(feature = "glow")]
+    if cc.gl.is_some() {
+        return State::new::<imanot::gpu::Glow>(tools);
+    }
+    #[cfg(feature = "wgpu")]
+    if let Some(render_state) = &cc.wgpu_render_state {
+        // Has to match eframe's configuration of egui's renderer. The app
+        // keeps eframe's defaults: no multisampling, no depth buffer.
+        imanot::gpu::Wgpu::register(render_state, &eframe::egui_wgpu::RendererOptions::default());
+        return State::new::<imanot::gpu::Wgpu>(tools);
+    }
+    unreachable!("eframe renders with glow or wgpu")
+}
+
 pub(crate) struct ImageViewerApp {
     storage: Box<dyn Storage>,
     selector: ImageSelector,
@@ -38,15 +57,16 @@ pub(crate) struct ImageViewerApp {
 }
 impl ImageViewerApp {
     pub fn new(
+        cc: &eframe::CreationContext<'_>,
         storage: Box<dyn Storage>,
         tool_registry: ToolRegistry,
         mask_generator: MaskGenerator,
     ) -> Self {
         let url_loader = Some(AsyncTask::new(storage.list_images()));
-        let state = State::new(Tools::new(
-            tool_registry.new_primary(),
-            tool_registry.new_secondary(),
-        ));
+        let state = new_state(
+            cc,
+            Tools::new(tool_registry.new_primary(), tool_registry.new_secondary()),
+        );
 
         Self {
             storage,
@@ -61,6 +81,13 @@ impl ImageViewerApp {
 }
 
 impl eframe::App for ImageViewerApp {
+    /// Opaque: the UI draws no background of its own, and eframe's default
+    /// clear color is translucent. With glow on Wayland, the compositor shows
+    /// what is behind the window through it (wgpu ignores the alpha).
+    fn clear_color(&self, visuals: &egui::Visuals) -> [f32; 4] {
+        visuals.panel_fill.to_normalized_gamma_f32()
+    }
+
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         // Ctrl/Cmd+Plus/Minus is reserved for image zoom
         // so disable egui's own global UI-scale shortcut on the same keys.

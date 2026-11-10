@@ -6,9 +6,10 @@
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     flake-utils.url = "github:numtide/flake-utils";
     fenix.url = "github:nix-community/fenix";
+    devtools.url = "github:mineichen/nix-devtools";
   };
 
-  outputs = { self, nixpkgs, flake-utils, fenix, ... }:
+  outputs = inputs@{ self, nixpkgs, flake-utils, fenix, devtools, ... }:
     flake-utils.lib.eachDefaultSystem (system:
       let
         pkgs = import nixpkgs {
@@ -64,44 +65,22 @@
           trunk --version
         '';
 
-        # Mirrors rust-analyzer-lsp@claude-plugins-official, which only declares the server.
-        # Built into the image, because /root/.claude isn't persisted between runs.
-        rustAnalyzerLspPlugin = pkgs.writeTextDir "rust-analyzer-lsp/.claude-plugin/plugin.json"
-          (builtins.toJSON {
-            name = "rust-analyzer-lsp";
-            description = "Rust language server for code intelligence and analysis";
-            version = "1.0.0";
-            lspServers.rust-analyzer = {
-              command = "${rust}/bin/rust-analyzer";
-              extensionToLanguage.".rs" = "rust";
-            };
-          });
-        claudeCodeWithLsp = pkgs.writeShellScriptBin "claude" ''
-          exec ${pkgs.claude-code}/bin/claude --plugin-dir ${rustAnalyzerLspPlugin}/rust-analyzer-lsp "$@"
-        '';
-
-        policy = pkgs.writeText "policy.json"
-          ''{"default":[{"type":"insecureAcceptAnything"}]}'';
-
-        containername = "imanot-isolated-dev";
-
-        # Make passt (pasta) available to the host-side Podman process.
-        podmanRuntimePath = pkgs.lib.makeBinPath [
-          pkgs.passt
-        ];
-
-        podmanRun = ''
-          workspace="$(realpath "''${1:-.}")"
-          exec ${pkgs.podman}/bin/podman run --rm -it \
-            --network=pasta \
-            --tmpfs /tmp \
-            -v "$workspace:/workspace/imanot:z" \
-            -v "../imbuf:/workspace/imbuf:z" \
-            -v "../imask:/workspace/imask:z" \
-            -w "/workspace/imanot" \
-            -e HOME=/root \
-            ${containername}:latest /bin/entrypoint.sh
-        '';
+        isolated = devtools.lib.isolated {
+          inherit pkgs inputs;
+          extraMounts = [ "../imbuf" "../imask" ];
+          name = "imanot-isolated-dev";
+          packages = commonBuildInputs ++ [
+            pkgs.ripgrep
+            pkgs.git
+            pkgs.opencode
+            pkgs.busybox
+          ];
+          claude.pluginDirs = [
+            (devtools.lib.claudeRustAnalyzer { inherit pkgs; rust-analyzer = rust; })
+          ];
+          env = envVars;
+          shellHook = greet;
+        };
 
       in
       {
@@ -114,76 +93,9 @@
           shellHook = greet;
         } // envVars);
 
-        packages.isolated-build = pkgs.dockerTools.buildImage {
-          name = containername;
-          tag = "latest";
-
-          copyToRoot = pkgs.buildEnv {
-            name = containername;
-
-            paths = commonBuildInputs ++ [
-              pkgs.bashInteractive
-              pkgs.ripgrep
-              pkgs.passt
-              pkgs.git
-              claudeCodeWithLsp
-              pkgs.opencode
-              pkgs.busybox
-
-              (pkgs.writeScriptBin "entrypoint.sh" ''
-                #!${pkgs.bashInteractive}/bin/bash
-                ${greet}
-                exec ${pkgs.bashInteractive}/bin/bash
-              '')
-            ];
-
-            pathsToLink = [
-              "/bin"
-              "/lib"
-              "/include"
-              "/share"
-            ];
-          };
-
-          config = {
-            Env =
-              pkgs.lib.mapAttrsToList
-                (k: v: "${k}=${v}")
-                envVars
-              ++ [ "HOME=/root" ];
-
-            Cmd = [ "/bin/entrypoint.sh" ];
-
-            WorkingDir = "/workspace/imanot";
-          };
-        };
-
-        apps.isolated-build = {
+        apps.isolated = {
           type = "app";
-
-          program = toString (pkgs.writeShellScript containername ''
-            export PATH="${podmanRuntimePath}:$PATH"
-
-            ${pkgs.podman}/bin/podman rmi ${containername} || true
-
-            ${pkgs.podman}/bin/podman load \
-              --signature-policy ${policy} \
-              --input ${self.packages.${system}.isolated-build}
-
-            ${podmanRun}
-          '');
-        };
-
-        apps.isolated-nobuild = {
-          type = "app";
-
-          program = toString (pkgs.writeShellScript "run-isolated" ''
-            set -euo pipefail
-
-            export PATH="${podmanRuntimePath}:$PATH"
-
-            ${podmanRun}
-          '');
+          program = pkgs.lib.getExe isolated;
         };
 
         apps.default = {
@@ -224,7 +136,7 @@
 
             exec nix develop "$PROJECT_ROOT" --command bash -c "
               cd '$PROJECT_ROOT/annotation-tool'
-              exec ${pkgs.trunk}/bin/trunk serve --release --no-default-features
+              exec ${pkgs.trunk}/bin/trunk serve --release --no-default-features --features glow
             "
           ''}/bin/annotation-tool-web";
         };
@@ -242,15 +154,36 @@
               exit 1
             fi
 
+            # Renderer, optionally the first argument: --glow (default) or --wgpu.
+            # wgpu builds into its own target directory, so both builds can
+            # exist and run side by side without rebuilding each other.
+            case "''${1:-}" in
+              --wgpu)
+                shift
+                FEATURES="--no-default-features --features wayland,sam,wgpu"
+                TARGET_DIR="$PROJECT_ROOT/target/wgpu"
+                ;;
+              --glow)
+                shift
+                FEATURES="--features sam"
+                TARGET_DIR="$PROJECT_ROOT/target"
+                ;;
+              *)
+                FEATURES="--features sam"
+                TARGET_DIR="$PROJECT_ROOT/target"
+                ;;
+            esac
+
             # Build if needed
             nix develop "$PROJECT_ROOT" --command bash -c \
-              "cargo build --release --features sam --bin annotation-tool-app"
+              "cargo build --release $FEATURES --bin annotation-tool-app --target-dir '$TARGET_DIR'"
 
             # Run with arguments passed through
             exec nix develop "$PROJECT_ROOT" --command bash -c "
               export LD_LIBRARY_PATH=${pkgs.lib.makeLibraryPath [
                 pkgs.libGL
                 pkgs.mesa
+                pkgs.vulkan-loader
                 onnxruntime
                 pkgs.stdenv.cc.cc.lib
               ]}:\$LD_LIBRARY_PATH
@@ -259,9 +192,9 @@
               export RUST_LOG=''${RUST_LOG:-imanot=debug}
 
               if [ \$# -eq 0 ]; then
-                exec "$PROJECT_ROOT/target/release/annotation-tool-app" ~/Downloads
+                exec '$TARGET_DIR/release/annotation-tool-app' ~/Downloads
               else
-                exec "$PROJECT_ROOT/target/release/annotation-tool-app" "\$@"
+                exec '$TARGET_DIR/release/annotation-tool-app' \"\$@\"
               fi
             " _ "$@"
           ''}/bin/annotation-tool-app";

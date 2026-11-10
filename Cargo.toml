@@ -9,6 +9,8 @@ edition = "2024"
 [workspace.dependencies]
 eframe = { version = "0.36", default-features = false }
 egui = { version = "0.36", default-features = false }
+egui_glow = { version = "0.36", default-features = false }
+egui-wgpu = { version = "0.36", default-features = false }
 emath = "0.36"
 euclid = "0.22"
 fixed = "1"

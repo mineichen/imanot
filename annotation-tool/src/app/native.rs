@@ -29,11 +29,15 @@ pub fn run_native(mappers: ImageCallbackMap) -> Result<(), eframe::Error> {
 
     info!("Run with config: {config:?}");
     info!("Image directory: {}", image_dir);
+    info!("Renderer: {}", options.renderer);
+    // Tells the windows apart when running builds for both renderers side by side
+    let title = format!("Image Viewer ({})", options.renderer);
     eframe::run_native(
-        "Image Viewer",
+        &title,
         options,
-        Box::new(|_cc| {
+        Box::new(|cc| {
             Ok(Box::new(ImageViewerApp::new(
+                cc,
                 Box::new(crate::FileStorage::new(image_dir)),
                 ToolRegistry::from(&config),
                 super::MaskGenerator::new(mappers),

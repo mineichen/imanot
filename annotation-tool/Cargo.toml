@@ -16,7 +16,6 @@ bytemuck = "1"
 brotli = "9"
 eframe = { workspace = true, features = [
     "default_fonts",
-    "glow"
 ] }
 imanot = { path = "../imanot", features = ["image-0_25"] }
 egui = { workspace = true, features = ["default_fonts"] }
@@ -59,7 +58,11 @@ console_error_panic_hook = "0.1"
 
 
 [features]
-default = ["wayland", "sam"]
+default = ["wayland", "sam", "glow"]
+# The renderer of eframe, imanot draws with the same one.
+# If both are enabled, eframe and the app use glow.
+glow = ["eframe/glow", "imanot/glow"]
+wgpu = ["eframe/wgpu", "imanot/wgpu"]
 wayland = ["eframe/wayland"]
 x11 = ["eframe/x11"]
 sam = ["ort", "ndarray"]

@@ -4,6 +4,7 @@ use std::{future::Future, pin::Pin, sync::Arc};
 mod async_task;
 mod cursor_image;
 mod geometry;
+pub mod gpu;
 mod image_state;
 mod image_utils;
 mod mask;

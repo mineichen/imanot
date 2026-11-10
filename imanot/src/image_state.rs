@@ -17,14 +17,14 @@ pub enum ImageState {
 }
 
 impl ImageState {
-    pub fn sources(
-        &mut self,
-        ctx: &egui::Context,
-    ) -> impl Iterator<Item = ImageSource<'static>> + '_ {
+    /// The textures the viewer draws. Masks are not among them, they are
+    /// drawn by the GPU backend (see [`GpuBackend`](crate::gpu::GpuBackend)).
+    pub fn sources(&self) -> impl Iterator<Item = ImageSource<'static>> + '_ {
         match self {
-            ImageState::Loaded(x) => itertools::Either::Left(x.sources(ctx)),
-            _ => itertools::Either::Right(std::iter::empty()),
+            ImageState::Loaded(x) => Some(x.texture.1.clone()),
+            _ => None,
         }
+        .into_iter()
     }
 }
 
@@ -50,12 +50,6 @@ impl ImageStateLoaded {
                 Default::default(),
             ),
         })
-    }
-    pub fn sources(
-        &mut self,
-        ctx: &egui::Context,
-    ) -> impl Iterator<Item = ImageSource<'static>> + '_ {
-        std::iter::once(self.texture.1.clone()).chain(self.masks.sources(ctx))
     }
     /// Replaces the displayed image. The only fallible step (the texture) runs
     /// first, so on error `self` is left untouched.

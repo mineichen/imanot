@@ -29,8 +29,9 @@ pub fn run_web(mappers: ImageCallbackMap) {
             .start(
                 canvas.clone(),
                 web_options,
-                Box::new(|_cc| {
+                Box::new(|cc| {
                     let mut app = crate::app::ImageViewerApp::new(
+                        cc,
                         Box::new(crate::InMemoryStorage::chessboard()),
                         ToolRegistry::from(&Config::default()),
                         super::MaskGenerator::new(mappers),

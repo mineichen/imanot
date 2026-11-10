@@ -81,9 +81,9 @@ impl RectSelection {
             if let (Some(start_image), Some((end_x, end_y))) =
                 (self.drag_start_image, ctx.cursor_image_pos())
             {
-                // The mask texture is sized from `adjust`, not `original`, so we
+                // The masks are sized from `adjust`, not `original`, so we
                 // must clip against the adjusted dimensions to avoid creating
-                // ranges that exceed the mask buffer.
+                // ranges that exceed the masks.
                 let (image_width, image_height) = ctx.image.image.adjust.dimensions();
                 let (start_x, start_y) = {
                     let (x, y) = ImagePainter::pixel_at(start_image, image_width, image_height);

@@ -1,0 +1,1 @@
+Currently, each draw-tool holds the information on which layer and in what mode it's drawing. I want to store this somewhere in the app-state(you decide where), so i don't have to create all combinations of tools. I

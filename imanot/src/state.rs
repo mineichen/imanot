@@ -3,6 +3,7 @@ use egui::{InnerResponse, Sense};
 use crate::{
     CursorImage, CursorImageSystem, HistoryStrategy, ImageData, ImageState, ImageStateLoaded,
     ImageViewer, ImageViewerInteraction, Tools,
+    gpu::{GpuBackend, GpuMasks, MaskPainter},
 };
 
 /// State container for handling tool interactions with the image viewer.
@@ -44,6 +45,8 @@ pub struct State {
     postpone_new_images: bool,
     /// The latest image handed to `set_image`, waiting for the intake.
     pending_image: PendingImageUpdate,
+    /// Draws the masks with the backend chosen in [`State::new`]
+    mask_painter: Box<dyn MaskPainter>,
 }
 
 /// An image waiting to be shown by a [`State`], optionally with a callback.
@@ -100,8 +103,10 @@ pub struct StateConfig {
 }
 
 impl State {
-    /// Create a new State with the given tools
-    pub fn new(tools: Tools) -> Self {
+    /// Create a new State with the given tools, drawing with the renderer
+    /// eframe uses (see [`gpu`](crate::gpu)), e.g.
+    /// `State::new::<imanot::gpu::Glow>(tools)`.
+    pub fn new<B: GpuBackend>(tools: Tools) -> Self {
         Self {
             image_state: crate::ImageState::NotLoaded,
             viewer: ImageViewer::default(),
@@ -115,6 +120,7 @@ impl State {
             config: StateConfig::default(),
             postpone_new_images: false,
             pending_image: PendingImageUpdate::None,
+            mask_painter: Box::new(GpuMasks::<B>::new()),
         }
     }
     /// Shows `image` as soon as neither the pointer nor a tool holds the
@@ -145,7 +151,12 @@ impl State {
 
         let InnerResponse { inner, response } =
             self.viewer
-                .ui(ui, self.image_state.sources(&ctx), Some(Sense::click()));
+                .ui(ui, self.image_state.sources(), Some(Sense::click()));
+        // Right above the image, below whatever the tools draw. Filled once the
+        // tools ran, so the masks show this very frame's hover and edits.
+        let mask_slot = inner
+            .as_ref()
+            .map(|r| r.image_painter.painter().add(egui::Shape::Noop));
 
         // Reset before the tools are called, so that only the pointer or a tool
         // actively setting it to `true` holds the next image back.
@@ -158,6 +169,15 @@ impl State {
             self.handle_tool_interaction(&response, &ctx, &mut r.image_painter);
             r
         });
+
+        // Before the intake: this frame shows the image the masks belong to
+        if let (Some(slot), Some(r), ImageState::Loaded(image)) =
+            (mask_slot, &inner, &self.image_state)
+        {
+            let painter = &r.image_painter;
+            self.mask_painter
+                .paint(painter.painter(), slot, painter.image_rect(), &image.masks);
+        }
 
         // The one place a new image is taken over. Only now is the hold of this
         // very frame known, and the old textures have been painted already.
@@ -311,7 +331,10 @@ mod tests {
             };
             Self {
                 ctx: egui::Context::default(),
-                state: State::new(Tools::new(Box::new(primary), Box::new(PanTool::default()))),
+                state: State::new::<crate::gpu::Headless>(Tools::new(
+                    Box::new(primary),
+                    Box::new(PanTool::default()),
+                )),
                 tool_hold,
                 tool_loads,
             }
@@ -579,6 +602,59 @@ mod tests {
         h.state.set_image(image("b", 10, HistoryStrategy::Reset));
         h.frame();
         assert_eq!(late.load(Ordering::Relaxed), 1);
+    }
+
+    /// Adds a mask layer in the first frame it runs and always draws an overlay
+    struct EditTool {
+        edited: bool,
+    }
+
+    impl Tool for EditTool {
+        fn handle_interaction(&mut self, ctx: ToolContext) {
+            if !self.edited {
+                self.edited = true;
+                ctx.image
+                    .masks
+                    .add(SortedRanges::from(imask::Span::new(0..5, 0)));
+            }
+            ctx.painter
+                .painter()
+                .circle_filled(Harness::CENTER, 3.0, egui::Color32::RED);
+        }
+    }
+
+    #[test]
+    fn masks_are_drawn_between_image_and_tools_including_the_frames_edits() {
+        let ctx = egui::Context::default();
+        let tool = EditTool { edited: false };
+        let mut state = State::new::<crate::gpu::Headless>(Tools::new(
+            Box::new(tool),
+            Box::new(PanTool::default()),
+        ));
+        state.set_image(image("a", 10, HistoryStrategy::Reset));
+        let mut drawn = || {
+            let output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                state.ui(ui);
+            });
+            let drawn = output
+                .shapes
+                .iter()
+                .filter_map(|clipped| match &clipped.shape {
+                    egui::Shape::Mesh(_) => Some("image"),
+                    egui::Shape::Callback(_) => Some("masks"),
+                    egui::Shape::Circle(_) => Some("tool"),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            output.drop_without_applying_deltas();
+            drawn
+        };
+        assert_eq!(
+            drawn(),
+            [] as [&str; 0],
+            "Image is installed after the frame"
+        );
+        assert_eq!(drawn(), ["image", "masks", "tool"]);
     }
 
     #[test]

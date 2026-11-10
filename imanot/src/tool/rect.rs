@@ -119,7 +119,7 @@ mod tests {
         let buffer = RgbImageInterleaved::new_arc(vec![[0u8; 3]; 60 * 100].into(), width, height)
             .expect("Buffer matches dimensions");
         let image_rect = Arc::new(Mutex::new(None));
-        let mut state = State::new(Tools::new(
+        let mut state = State::new::<crate::gpu::Headless>(Tools::new(
             Box::new(PlacementSpy {
                 rect: RectTool::default(),
                 image_rect: image_rect.clone(),

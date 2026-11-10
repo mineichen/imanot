@@ -8,7 +8,14 @@ description = "Extensible image annotation framework with zoom, pan and pixel se
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
+# Instances and uniforms as bytes for the GPU, already a dependency of egui_glow / egui-wgpu
+bytemuck = { version = "1", features = ["derive"] }
 egui.workspace = true
+egui_glow = { workspace = true, optional = true }
+egui-wgpu = { workspace = true, optional = true, features = [
+    # Paint callbacks must be Send + Sync, wgpu types only are on wasm with this
+    "fragile-send-sync-non-atomic-wasm",
+] }
 euclid.workspace = true
 fixed.workspace = true
 futures = "0.3"
@@ -19,7 +26,6 @@ itertools.workspace = true
 log.workspace = true
 nalgebra.workspace = true
 num-traits = "0.2"
-pulp = "0.22"
 serde = { workspace = true, features = ["derive"], optional = true }
 thiserror = "2"
 
@@ -30,6 +36,9 @@ web-sys = { version = "0.3", features = [
 
 [features]
 default = []
+# GPU backends, see `imanot::gpu`. Enable the one(s) eframe renders with.
+glow = ["dep:egui_glow"]
+wgpu = ["dep:egui-wgpu"]
 
 [dev-dependencies]
 serde_json = "1"
